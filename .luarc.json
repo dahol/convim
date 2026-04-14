@@ -1,0 +1,19 @@
+{
+  "workspace": {
+    "library": [
+      "/usr/share/nvim/runtime/lua",
+      "${3rd}/luv/library"
+    ],
+    "checkThirdParty": false,
+    "maxTriviaTokens": 100
+  },
+  "diagnostics": {
+    "globals": ["describe", "it", "assert", "before_each", "after_each", "mock", "stub"],
+    "disable": [],
+    "enable": true
+  },
+  "runtime": {
+    "version": "LuaJIT",
+    "builtin": "lua51"
+  }
+}

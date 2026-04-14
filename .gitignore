@@ -1,0 +1,51 @@
+# Lua / Neovim
+*.swp
+*.bak
+*.pyc
+*.log
+.session.vim
+*.lua_session
+
+# IDE
+.idea/
+.vscode/
+*.sublime-*
+*.code-workspace
+
+# Test coverage
+.coverage
+luacov.*
+coverage/
+
+# Config files with sensitive data
+.env
+.env.local
+.convimrc
+config.lua.bak
+*.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+vendor/
+lib/
+*.so
+*.dll
+
+# Backup files
+*~
+
+# Plugin directories (should not be committed)
+!lua/convim/*.lua
+!plugin/*.lua
+
+# Logs
+logs/
+
+# Package lock files
+package-lock.json
+yarn.lock
