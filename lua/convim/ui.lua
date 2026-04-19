@@ -18,11 +18,42 @@ local function open_confluence_buf(page_id, title, lines)
   local safe_title = (title or 'untitled'):gsub('[^%w%-_.]+', '_')
   local bufname = string.format('confluence://%s/%s', page_id, safe_title)
 
+  -- Find a "normal" window to display the buffer in: skip floating windows
+  -- (telescope leftovers) and special sidebars like neo-tree / NvimTree /
+  -- aerial that the user almost certainly doesn't want clobbered.
+  local function pick_target_win()
+    local cur = vim.api.nvim_get_current_win()
+    local function is_normal(win)
+      local cfg = vim.api.nvim_win_get_config(win)
+      if cfg.relative and cfg.relative ~= '' then return false end
+      local b  = vim.api.nvim_win_get_buf(win)
+      local bt = vim.bo[b].buftype
+      local ft = vim.bo[b].filetype
+      if bt == 'nofile' or bt == 'prompt' or bt == 'quickfix' or bt == 'help' then
+        return false
+      end
+      if ft == 'neo-tree' or ft == 'NvimTree' or ft == 'aerial'
+         or ft == 'TelescopePrompt' or ft == 'TelescopeResults' then
+        return false
+      end
+      return true
+    end
+    if is_normal(cur) then return cur end
+    for _, w in ipairs(vim.api.nvim_list_wins()) do
+      if is_normal(w) then return w end
+    end
+    -- No normal window found: open a new split.
+    vim.cmd('botright vsplit')
+    return vim.api.nvim_get_current_win()
+  end
+
   -- If we already have a live buffer for this page, focus and refresh it
   -- rather than creating a duplicate (which would E5108 on nvim_buf_set_name).
   local existing = vim.fn.bufnr(bufname)
   if existing ~= -1 and vim.api.nvim_buf_is_valid(existing) then
-    vim.api.nvim_set_current_buf(existing)
+    local target = pick_target_win()
+    vim.api.nvim_set_current_win(target)
+    vim.api.nvim_win_set_buf(target, existing)
     vim.bo[existing].modifiable = true
     vim.api.nvim_buf_set_lines(existing, 0, -1, false, lines)
     vim.bo[existing].modified = false
@@ -36,23 +67,22 @@ local function open_confluence_buf(page_id, title, lines)
   vim.bo[buf].swapfile  = false
   vim.bo[buf].buftype   = 'acwrite'   -- 'we handle the write ourselves'
   vim.bo[buf].buflisted = true
-  -- NB: do NOT set bufhidden='wipe'.  The picker (telescope) closes its
-  -- own prompt buffer right before invoking on_select, which can shift
-  -- focus and cause a wipe-marked buffer to be torn down mid-setup,
-  -- producing 'Invalid buffer id' on subsequent api calls.  Default
-  -- ('hide' for listed buffers) is what we want — user controls cleanup
-  -- via :bd.
 
   vim.api.nvim_buf_set_name(buf, bufname)
-  -- Populate before showing.  If anything in the autocmd chain triggered
-  -- by nvim_set_current_buf decides to inspect or wipe buffers, the
-  -- content is already in place.
+  -- Populate before showing.
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.bo[buf].filetype  = 'confluence'
-  vim.bo[buf].modified  = false
   vim.api.nvim_buf_set_var(buf, 'confluence_page_id', page_id)
   vim.api.nvim_buf_set_var(buf, 'confluence_title', title)
-  vim.api.nvim_set_current_buf(buf)
+
+  -- Display in a sensible window (not neo-tree, not telescope leftovers),
+  -- THEN set filetype.  Setting filetype triggers ftplugin/confluence.lua,
+  -- whose window-local options (foldmethod, conceallevel, wrap) apply to
+  -- whatever window is current at that moment.
+  local target = pick_target_win()
+  vim.api.nvim_set_current_win(target)
+  vim.api.nvim_win_set_buf(target, buf)
+  vim.bo[buf].filetype  = 'confluence'
+  vim.bo[buf].modified  = false
 
   -- Wire :w / :wq / :update to ConfluenceSave for this buffer only.
   vim.api.nvim_create_autocmd('BufWriteCmd', {
@@ -181,6 +211,22 @@ M.edit_page = function(page_id)
 
   local title = page.title or 'Untitled'
   local storage_value = (page.body and page.body.storage and page.body.storage.value) or ''
+
+  -- Diagnostic: surface why a buffer would end up empty rather than silently
+  -- handing the user a blank screen.  Common causes: API returned a body
+  -- shape we don't expect (representation mismatch, permissions, deleted
+  -- page) or the page genuinely has no body.
+  if storage_value == '' then
+    local has_body = page.body ~= nil
+    local has_storage = has_body and page.body.storage ~= nil
+    vim.notify(string.format(
+      'convim: page %s came back with empty storage body ' ..
+      '(body=%s, body.storage=%s, body.storage.value=%s). ' ..
+      'Check :ConfluenceListSpaces auth and that the page has content.',
+      page_id, tostring(has_body), tostring(has_storage),
+      tostring(page.body and page.body.storage and page.body.storage.value)
+    ), vim.log.levels.WARN)
+  end
 
   -- Pretty-print storage XHTML for editing (newlines + indent, drop local-id).
   local pretty = format.pretty(storage_value)
