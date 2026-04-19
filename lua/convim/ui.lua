@@ -11,27 +11,37 @@ local function buf_get_var(buf, name)
   return ok and val or nil
 end
 
---- Open a new scratch buffer and populate it with lines.
+--- Open (or focus, if already open) a Confluence buffer and populate it.
 --- Sets the filetype and marks it as a Confluence buffer with the given metadata.
 --- Uses buftype=acwrite + BufWriteCmd so plain `:w` (and `:wq`) save to Confluence.
 local function open_confluence_buf(page_id, title, lines)
-  local buf = vim.api.nvim_create_buf(true, false)
-  -- Give the buffer a unique, filesystem-safe pseudo-name so `:w` has a target
-  -- and tabline/statusline display something meaningful.
   local safe_title = (title or 'untitled'):gsub('[^%w%-_.]+', '_')
   local bufname = string.format('confluence://%s/%s', page_id, safe_title)
-  -- Avoid name collisions if the same page is opened twice
-  if vim.fn.bufexists(bufname) == 1 then
-    bufname = bufname .. '#' .. buf
+
+  -- If we already have a live buffer for this page, focus and refresh it
+  -- rather than creating a duplicate (which would E5108 on nvim_buf_set_name).
+  local existing = vim.fn.bufnr(bufname)
+  if existing ~= -1 and vim.api.nvim_buf_is_valid(existing) then
+    vim.api.nvim_set_current_buf(existing)
+    vim.bo[existing].modifiable = true
+    vim.api.nvim_buf_set_lines(existing, 0, -1, false, lines)
+    vim.bo[existing].modified = false
+    return existing
   end
+
+  local buf = vim.api.nvim_create_buf(true, false)
+  -- IMPORTANT: disable swapfile + set buftype BEFORE naming the buffer.
+  -- Otherwise Neovim may attempt to create ~/.local/state/nvim/swap/<name>.swp
+  -- and the next open of the same page will trigger E325 (ATTENTION swap exists).
+  vim.bo[buf].swapfile  = false
+  vim.bo[buf].buftype   = 'acwrite'   -- 'we handle the write ourselves'
+  vim.bo[buf].bufhidden = 'wipe'
+  vim.bo[buf].buflisted = true
+
   vim.api.nvim_buf_set_name(buf, bufname)
   vim.api.nvim_set_current_buf(buf)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.bo[buf].bufhidden = 'wipe'
-  vim.bo[buf].buftype   = 'acwrite'   -- 'we handle the write ourselves'
   vim.bo[buf].filetype  = 'confluence'
-  vim.bo[buf].buflisted = true
-  vim.bo[buf].swapfile  = false
   vim.bo[buf].modified  = false
   vim.api.nvim_buf_set_var(buf, 'confluence_page_id', page_id)
   vim.api.nvim_buf_set_var(buf, 'confluence_title', title)
