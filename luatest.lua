@@ -45,6 +45,7 @@ local test_files = {
   'tests/test_format.lua',
   'tests/test_converter.lua',
   'tests/test_api.lua',
+  'tests/test_picker.lua',
   'tests/test_ui.lua',
   'tests/test_main.lua',
 }

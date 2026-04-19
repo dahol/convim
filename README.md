@@ -20,6 +20,9 @@ save.
 
 - Neovim ≥ 0.9
 - [plenary.nvim](https://github.com/nvim-lua/plenary.nvim) (for `plenary.curl`)
+- [telescope.nvim](https://github.com/nvim-telescope/telescope.nvim) *(optional;
+  enables a floating live-search picker for `:ConfluenceSearch` and
+  `:ConfluenceListPages`. Falls back to `vim.ui.select` if not installed.)*
 - `curl` in `$PATH`
 - Confluence credentials:
   - **Cloud**: an account email + API token (`auth = "basic"`, auto-detected

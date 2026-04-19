@@ -1,6 +1,7 @@
 local api = require('convim.api')
 local config = require('convim.config')
 local format = require('convim.format')
+local picker = require('convim.picker')
 
 local M = {}
 
@@ -93,11 +94,18 @@ M.list_pages = function()
     return
   end
 
+  local on_pick = function(page) M.edit_page(page.id) end
+
+  -- Prefer telescope floating picker; fall back to vim.ui.select.
+  if picker.list_pages(pages, 'Confluence: ' .. config.space_key, on_pick) then
+    return
+  end
+
   vim.ui.select(pages, {
     prompt = 'Select a page to edit:',
     format_item = function(page) return page.title end,
   }, function(page)
-    if page then M.edit_page(page.id) end
+    if page then on_pick(page) end
   end)
 end
 
@@ -105,6 +113,15 @@ M.search_pages = function(query)
   local err = config.validate()
   if err then vim.notify(err, vim.log.levels.ERROR) return end
 
+  local on_pick = function(page) M.edit_page(page.id) end
+
+  -- Telescope path: live, incremental search inside a floating window.
+  -- The query (if any) seeds the prompt; further keystrokes re-query the API.
+  if picker.search_pages(api, config.space_key, query, on_pick) then
+    return
+  end
+
+  -- Fallback: prompt for a query, then list results via vim.ui.select.
   if not query or query == '' then
     vim.ui.input({ prompt = 'Search pages: ' }, function(input)
       if input and input ~= '' then M.search_pages(input) end
@@ -130,7 +147,7 @@ M.search_pages = function(query)
       return space .. (page.title or page.id)
     end,
   }, function(page)
-    if page then M.edit_page(page.id) end
+    if page then on_pick(page) end
   end)
 end
 
