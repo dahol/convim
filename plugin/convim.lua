@@ -39,6 +39,18 @@ end, {
   desc = 'Edit a Confluence page by ID, or pick from list',
 })
 
+vim.api.nvim_create_user_command('ConfluenceEditRaw', function(args)
+  local page_id = vim.trim(args.args)
+  if page_id == '' then
+    vim.notify('Usage: :ConfluenceEditRaw <page_id>', vim.log.levels.WARN)
+    return
+  end
+  convim.ui.edit_page_raw(page_id)
+end, {
+  nargs = 1,
+  desc = 'Edit a Confluence page as raw storage XHTML (no markdown round-trip)',
+})
+
 vim.api.nvim_create_user_command('ConfluenceNew', function(args)
   local title = vim.trim(args.args)
   convim.ui.new_page(title ~= '' and title or nil)

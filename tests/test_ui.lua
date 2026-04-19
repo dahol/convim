@@ -88,8 +88,8 @@ assert(new_buf ~= nil, 'edit_page: returns buffer handle')
 assert(vim.api.nvim_buf_is_valid(new_buf), 'edit_page: returned buffer is valid')
 
 -- Check buffer options
-assert(vim.bo[new_buf].filetype == 'confluence',
-  'edit_page: filetype is confluence')
+assert(vim.bo[new_buf].filetype == 'markdown',
+  'edit_page: filetype is markdown (default mode renders storage as markdown)')
 assert(vim.bo[new_buf].buftype == 'acwrite',
   'edit_page: buftype is acwrite (so :w fires our BufWriteCmd)')
 
@@ -101,9 +101,10 @@ assert(buf_var(new_buf, 'confluence_title') == 'Page One', 'edit_page: title var
 local lines = get_buf_lines(new_buf)
 local content = table.concat(lines, '\n')
 assert(content:find('Hello from page 1'), 'edit_page: page content in buffer')
-assert(#lines > 1, 'edit_page: storage XHTML is pretty-printed across multiple lines')
-assert(not content:find('local%-id'), 'edit_page: local-id attributes stripped on read')
-print('  ui: edit_page() pretty-prints storage XHTML and strips local-id')
+assert(content:find('# Title'), 'edit_page: storage <h1> rendered as markdown heading')
+assert(#lines > 1, 'edit_page: rendered across multiple lines')
+assert(not content:find('local%-id'), 'edit_page: local-id attributes never reach the buffer')
+print('  ui: edit_page() renders storage as markdown')
 
 -- edit_page notifies and returns nil for unknown page
 local ui3 = reload_ui()
@@ -121,9 +122,9 @@ print('  ui: edit_page() notifies on error and returns nil')
 -- Set up a confluence buffer
 local ui4 = reload_ui()
 local save_buf = ui4.edit_page('1')
--- Edit the buffer content
+-- Edit the buffer content (markdown — that's the default editing mode now)
 vim.bo[save_buf].modifiable = true
-vim.api.nvim_buf_set_lines(save_buf, 0, -1, false, { '<p>Updated content</p>' })
+vim.api.nvim_buf_set_lines(save_buf, 0, -1, false, { 'Updated content' })
 
 local save_notify_msg = nil
 local orig_notify2 = vim.notify
@@ -135,9 +136,11 @@ assert(save_notify_msg ~= nil, 'save_page: emits notification')
 assert(save_notify_msg:find('Saved') or save_notify_msg:find('Page One'),
   'save_page: success notification mentions page')
 assert(last_update ~= nil, 'save_page: forwards to api.update_page')
+assert(last_update.content:find('<p>Updated content</p>', 1, true),
+  'save_page: markdown body converted to <p> on the way out')
 assert(not last_update.content:find('\n'),
-  'save_page: content sent to API is compacted (single line, no newlines)')
-print('  ui: save_page() compacts buffer to single line before sending to API')
+  'save_page: storage payload has no newlines')
+print('  ui: save_page() converts markdown buffer to storage XHTML before sending to API')
 
 -- save_page warns on non-confluence buffer
 local ui5 = reload_ui()
@@ -157,7 +160,7 @@ print('  ui: save_page() warns on non-confluence buffer')
 local ui_w = reload_ui()
 local w_buf = ui_w.edit_page('1')
 vim.bo[w_buf].modifiable = true
-vim.api.nvim_buf_set_lines(w_buf, 0, -1, false, { '<p>edited via :w</p>' })
+vim.api.nvim_buf_set_lines(w_buf, 0, -1, false, { 'edited via :w' })
 vim.bo[w_buf].modified = true
 
 local w_msg = nil

@@ -6,8 +6,10 @@ save.
 
 ## Features
 
-- Browse spaces and pages with `vim.ui.select`
-- Edit page content in a dedicated `confluence` filetype buffer
+- Browse spaces and pages with `vim.ui.select` (or telescope if installed)
+- Edit page content as **markdown** with lossless round-trip back to Confluence storage XHTML on save
+- Unmodelled macros (info panels, layouts, etc.) are stashed verbatim and re-inlined on save — they survive editing intact
+- `:ConfluenceEditRaw` escape hatch for editing the storage XHTML directly
 - Save changes back to Confluence with plain `:w` (correct version increment via PUT)
 - Create new pages with `:ConfluenceNew` (resolves space key → ID for v2)
 - Search pages by title with `:ConfluenceSearch`
@@ -81,7 +83,8 @@ Store credentials in environment variables rather than committing them.
 | `:ConfluenceVerifyAuth` | Probe the API and report auth status |
 | `:ConfluenceListSpaces` | Browse and select a space |
 | `:ConfluenceListPages` | List pages in the selected space |
-| `:ConfluenceEdit [id]` | Open a page by ID, or pick from list |
+| `:ConfluenceEdit [id]` | Open a page by ID, or pick from list (markdown view) |
+| `:ConfluenceEditRaw <id>` | Open a page as raw storage XHTML (no markdown round-trip) |
 | `:ConfluenceNew [title]` | Create a new page in the selected space |
 | `:ConfluenceSearch [query]` | Search pages by title |
 | `:ConfluenceSave` | Save the current buffer back to Confluence (or just `:w`) |
@@ -100,10 +103,19 @@ Buffer-local mappings set automatically on `confluence` buffers:
 
 ## Buffer format
 
-`:ConfluenceEdit` opens the page's **storage format** (XHTML) directly. Edits
-are sent back verbatim. `:ConfluencePreview` runs the buffer through the
-Confluence convert endpoint, treating it as wiki markup by default — useful if
-you'd rather author in wiki and convert before saving.
+`:ConfluenceEdit` converts the page's storage XHTML to **markdown** for
+editing — headings, lists, links, **bold**/*italic*/`code`, fenced code blocks,
+tables, and blockquotes all round-trip back to storage XHTML on save.
+
+Constructs convim doesn't natively model (info panels, layouts, status
+macros, task lists, anything else under `<ac:structured-macro>`) are replaced
+in the buffer with placeholder lines like `<!-- convim:macro:1 -->` and the
+verbatim XHTML is stashed in a buffer-local variable. On save, placeholders
+are re-inlined unchanged, so opening and saving a page round-trips losslessly
+even when convim doesn't understand every block.
+
+If a page renders poorly as markdown, `:ConfluenceEditRaw <id>` opens it in
+the original storage-XHTML view — what you save is exactly what you see.
 
 ## Testing
 

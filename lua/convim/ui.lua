@@ -1,6 +1,7 @@
 local api = require('convim.api')
 local config = require('convim.config')
 local format = require('convim.format')
+local markdown = require('convim.markdown')
 local picker = require('convim.picker')
 
 local M = {}
@@ -12,11 +13,16 @@ local function buf_get_var(buf, name)
 end
 
 --- Open (or focus, if already open) a Confluence buffer and populate it.
---- Sets the filetype and marks it as a Confluence buffer with the given metadata.
---- Uses buftype=acwrite + BufWriteCmd so plain `:w` (and `:wq`) save to Confluence.
-local function open_confluence_buf(page_id, title, lines)
+--- `opts` may contain:
+---   mode  = 'markdown' (default) or 'storage'
+---   meta  = the meta table returned by markdown.from_storage (only required
+---           in markdown mode so the save path can rebuild storage XHTML).
+local function open_confluence_buf(page_id, title, lines, opts)
+  opts = opts or {}
+  local mode = opts.mode or 'markdown'
   local safe_title = (title or 'untitled'):gsub('[^%w%-_.]+', '_')
-  local bufname = string.format('confluence://%s/%s', page_id, safe_title)
+  local ext = (mode == 'markdown') and 'md' or 'xhtml'
+  local bufname = string.format('confluence://%s/%s.%s', page_id, safe_title, ext)
 
   -- Find a "normal" window to display the buffer in: skip floating windows
   -- (telescope leftovers) and special sidebars like neo-tree / NvimTree /
@@ -56,6 +62,9 @@ local function open_confluence_buf(page_id, title, lines)
     vim.api.nvim_win_set_buf(target, existing)
     vim.bo[existing].modifiable = true
     vim.api.nvim_buf_set_lines(existing, 0, -1, false, lines)
+    if opts.meta then
+      vim.api.nvim_buf_set_var(existing, 'confluence_meta', opts.meta)
+    end
     vim.bo[existing].modified = false
     return existing
   end
@@ -73,16 +82,20 @@ local function open_confluence_buf(page_id, title, lines)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.api.nvim_buf_set_var(buf, 'confluence_page_id', page_id)
   vim.api.nvim_buf_set_var(buf, 'confluence_title', title)
+  vim.api.nvim_buf_set_var(buf, 'confluence_mode', mode)
+  if opts.meta then
+    vim.api.nvim_buf_set_var(buf, 'confluence_meta', opts.meta)
+  end
 
   -- Display in a sensible window (not neo-tree, not telescope leftovers),
-  -- THEN set filetype.  Setting filetype triggers ftplugin/confluence.lua,
-  -- whose window-local options (foldmethod, conceallevel, wrap) apply to
-  -- whatever window is current at that moment.
+  -- THEN set filetype.  Setting filetype triggers ftplugin/<ft>.lua,
+  -- whose window-local options apply to whatever window is current at that
+  -- moment.
   local target = pick_target_win()
   vim.api.nvim_set_current_win(target)
   vim.api.nvim_win_set_buf(target, buf)
-  vim.bo[buf].filetype  = 'confluence'
-  vim.bo[buf].modified  = false
+  vim.bo[buf].filetype = (mode == 'markdown') and 'markdown' or 'confluence'
+  vim.bo[buf].modified = false
 
   -- Wire :w / :wq / :update to ConfluenceSave for this buffer only.
   vim.api.nvim_create_autocmd('BufWriteCmd', {
@@ -228,10 +241,32 @@ M.edit_page = function(page_id)
     ), vim.log.levels.WARN)
   end
 
-  -- Pretty-print storage XHTML for editing (newlines + indent, drop local-id).
+  -- Default editing mode: convert storage XHTML → markdown for a readable
+  -- buffer, stashing the verbatim original (and any unmodelled macros) in
+  -- a buffer-var so save can rebuild faithful storage XHTML.
+  local md, meta = markdown.from_storage(storage_value)
+  local lines = vim.split(md, '\n', { plain = true })
+  return open_confluence_buf(page_id, title, lines, { mode = 'markdown', meta = meta })
+end
+
+--- Open a page in raw storage-XHTML mode (no markdown round-trip).  Useful as
+--- an escape hatch when the markdown view loses fidelity for a particular
+--- page; what you save is exactly what you see.
+M.edit_page_raw = function(page_id)
+  local err = config.validate()
+  if err then vim.notify(err, vim.log.levels.ERROR) return end
+
+  local page, fetch_err = api.get_page_content(page_id)
+  if not page then
+    vim.notify('Failed to fetch page: ' .. (fetch_err or ''), vim.log.levels.ERROR)
+    return
+  end
+
+  local title = page.title or 'Untitled'
+  local storage_value = (page.body and page.body.storage and page.body.storage.value) or ''
   local pretty = format.pretty(storage_value)
   local lines = vim.split(pretty, '\n', { plain = true })
-  return open_confluence_buf(page_id, title, lines)
+  return open_confluence_buf(page_id, title, lines, { mode = 'storage' })
 end
 
 M.new_page = function(title, parent_id)
@@ -257,9 +292,10 @@ M.new_page = function(title, parent_id)
   end
 
   vim.notify('Created page: ' .. title, vim.log.levels.INFO)
-  -- New buffer is empty storage XHTML; the user can write storage markup or
-  -- use :ConfluencePreview to convert from wiki markup before saving.
-  return open_confluence_buf(page.id, title, { '' })
+  -- New pages start in markdown mode with an empty body and an empty meta
+  -- table — there are no original macros to preserve.
+  return open_confluence_buf(page.id, title, { '' },
+    { mode = 'markdown', meta = { original = '', macros = {} } })
 end
 
 M.save_page = function()
@@ -272,10 +308,30 @@ M.save_page = function()
   end
 
   local title = buf_get_var(buf, 'confluence_title') or 'Untitled'
+  local mode  = buf_get_var(buf, 'confluence_mode') or 'storage'
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  -- Re-compact the pretty-printed buffer back to a single-line storage string
-  -- before sending to Confluence.
-  local content = format.compact(table.concat(lines, '\n'))
+  local body  = table.concat(lines, '\n')
+
+  local content
+  if mode == 'markdown' then
+    local meta = buf_get_var(buf, 'confluence_meta') or { macros = {} }
+    content = markdown.to_storage(body, meta)
+    -- Surface a warning if the converter produced an empty document but the
+    -- buffer wasn't empty — that means our regex pipeline missed something
+    -- and we'd otherwise silently wipe the page.
+    if vim.trim(body) ~= '' and (not content or content == '') then
+      vim.notify(
+        'convim: markdown→storage produced an empty body. ' ..
+        'Aborting save to avoid wiping the page. Use :ConfluenceEditRaw <id> ' ..
+        'to edit storage XHTML directly.',
+        vim.log.levels.ERROR)
+      return
+    end
+  else
+    -- Re-compact the pretty-printed buffer back to a single-line storage string
+    -- before sending to Confluence.
+    content = format.compact(body)
+  end
 
   local ok, update_err = api.update_page(page_id, title, content)
   if ok then
