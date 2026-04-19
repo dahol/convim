@@ -76,8 +76,8 @@ vim.api.nvim_create_user_command('ConfluencePreview', function()
   local preview_buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_current_buf(preview_buf)
   vim.api.nvim_buf_set_lines(preview_buf, 0, -1, false, preview_lines)
-  vim.api.nvim_buf_set_option(preview_buf, 'bufhidden', 'wipe')
-  vim.api.nvim_buf_set_option(preview_buf, 'buftype', 'nofile')
-  vim.api.nvim_buf_set_option(preview_buf, 'modifiable', false)
+  vim.bo[preview_buf].bufhidden  = 'wipe'
+  vim.bo[preview_buf].buftype    = 'nofile'
+  vim.bo[preview_buf].modifiable = false
   vim.notify('Preview ready', vim.log.levels.INFO)
 end, { desc = 'Preview the current Confluence buffer as plain text' })

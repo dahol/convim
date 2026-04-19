@@ -5,7 +5,7 @@
 package.loaded['convim.config']  = nil
 package.loaded['convim.api']     = nil
 package.loaded['convim.ui']      = nil
-package.loaded['plenary.http']   = nil
+package.loaded['plenary.curl']   = nil
 
 local config = require('convim.config')
 config.base_url  = 'https://test.atlassian.net'
@@ -85,10 +85,10 @@ assert(new_buf ~= nil, 'edit_page: returns buffer handle')
 assert(vim.api.nvim_buf_is_valid(new_buf), 'edit_page: returned buffer is valid')
 
 -- Check buffer options
-assert(vim.api.nvim_buf_get_option(new_buf, 'filetype') == 'confluence',
+assert(vim.bo[new_buf].filetype == 'confluence',
   'edit_page: filetype is confluence')
-assert(vim.api.nvim_buf_get_option(new_buf, 'buftype') == 'nofile',
-  'edit_page: buftype is nofile')
+assert(vim.bo[new_buf].buftype == 'acwrite',
+  'edit_page: buftype is acwrite (so :w fires our BufWriteCmd)')
 
 -- Check buffer vars
 assert(buf_var(new_buf, 'confluence_page_id') == '1', 'edit_page: page_id var set')
@@ -117,7 +117,7 @@ print('  ui: edit_page() notifies on error and returns nil')
 local ui4 = reload_ui()
 local save_buf = ui4.edit_page('1')
 -- Edit the buffer content
-vim.api.nvim_buf_set_option(save_buf, 'modifiable', true)
+vim.bo[save_buf].modifiable = true
 vim.api.nvim_buf_set_lines(save_buf, 0, -1, false, { '<p>Updated content</p>' })
 
 local save_notify_msg = nil
@@ -142,6 +142,27 @@ vim.notify = orig_notify3
 assert(warn_msg ~= nil and warn_msg:find('Not a Confluence'),
   'save_page: warns on non-confluence buffer')
 print('  ui: save_page() warns on non-confluence buffer')
+
+-- ── tests: :w triggers save via BufWriteCmd ──────────────────────────────────
+
+local ui_w = reload_ui()
+local w_buf = ui_w.edit_page('1')
+vim.bo[w_buf].modifiable = true
+vim.api.nvim_buf_set_lines(w_buf, 0, -1, false, { '<p>edited via :w</p>' })
+vim.bo[w_buf].modified = true
+
+local w_msg = nil
+local orig_notify4 = vim.notify
+vim.notify = function(msg, _) w_msg = msg end
+-- :write fires BufWriteCmd, which our autocmd routes to save_page
+vim.cmd('silent write')
+vim.notify = orig_notify4
+
+assert(w_msg ~= nil and w_msg:find('Saved'),
+  ':w: BufWriteCmd autocmd routed to save_page (got: ' .. tostring(w_msg) .. ')')
+assert(vim.bo[w_buf].modified == false,
+  ':w: modified flag cleared after successful save')
+print('  ui: :w triggers ConfluenceSave via BufWriteCmd and clears modified flag')
 
 -- ── tests: list_spaces selects space ─────────────────────────────────────────
 

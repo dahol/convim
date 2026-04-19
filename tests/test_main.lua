@@ -3,8 +3,8 @@
 
 package.loaded['convim']        = nil
 package.loaded['convim.config'] = nil
--- plenary.http is not installed in test env; mock it so converter can load
-package.loaded['plenary.http'] = {
+-- plenary.curl is not installed in test env; mock it so converter can load
+package.loaded['plenary.curl'] = {
   get  = function() return { status = 200, body = '{}' } end,
   post = function() return { status = 200, body = '{}' } end,
   put  = function() return { status = 200, body = '{}' } end,

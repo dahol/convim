@@ -11,16 +11,36 @@ end
 
 --- Open a new scratch buffer and populate it with lines.
 --- Sets the filetype and marks it as a Confluence buffer with the given metadata.
+--- Uses buftype=acwrite + BufWriteCmd so plain `:w` (and `:wq`) save to Confluence.
 local function open_confluence_buf(page_id, title, lines)
-  local buf = vim.api.nvim_create_buf(false, true)
+  local buf = vim.api.nvim_create_buf(true, false)
+  -- Give the buffer a unique, filesystem-safe pseudo-name so `:w` has a target
+  -- and tabline/statusline display something meaningful.
+  local safe_title = (title or 'untitled'):gsub('[^%w%-_.]+', '_')
+  local bufname = string.format('confluence://%s/%s', page_id, safe_title)
+  -- Avoid name collisions if the same page is opened twice
+  if vim.fn.bufexists(bufname) == 1 then
+    bufname = bufname .. '#' .. buf
+  end
+  vim.api.nvim_buf_set_name(buf, bufname)
   vim.api.nvim_set_current_buf(buf)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.api.nvim_buf_set_option(buf, 'bufhidden', 'wipe')
-  vim.api.nvim_buf_set_option(buf, 'buftype', 'nofile')
-  vim.api.nvim_buf_set_option(buf, 'filetype', 'confluence')
-  vim.api.nvim_buf_set_option(buf, 'buflisted', false)
+  vim.bo[buf].bufhidden = 'wipe'
+  vim.bo[buf].buftype   = 'acwrite'   -- 'we handle the write ourselves'
+  vim.bo[buf].filetype  = 'confluence'
+  vim.bo[buf].buflisted = true
+  vim.bo[buf].swapfile  = false
+  vim.bo[buf].modified  = false
   vim.api.nvim_buf_set_var(buf, 'confluence_page_id', page_id)
   vim.api.nvim_buf_set_var(buf, 'confluence_title', title)
+
+  -- Wire :w / :wq / :update to ConfluenceSave for this buffer only.
+  vim.api.nvim_create_autocmd('BufWriteCmd', {
+    buffer = buf,
+    desc   = 'convim: save Confluence page on :w',
+    callback = function() M.save_page() end,
+  })
+
   return buf
 end
 
@@ -39,13 +59,7 @@ M.list_spaces = function()
     return
   end
 
-  -- Build display list, keeping the original space objects for reference
-  local items = {}
-  for _, space in ipairs(spaces) do
-    table.insert(items, space)
-  end
-
-  vim.ui.select(items, {
+  vim.ui.select(spaces, {
     prompt = 'Select a Confluence space:',
     format_item = function(space)
       return string.format('[%s] %s', space.key, space.name or space.key)
@@ -160,7 +174,9 @@ M.new_page = function(title, parent_id)
   end
 
   vim.notify('Created page: ' .. title, vim.log.levels.INFO)
-  return open_confluence_buf(page.id, title, { '-- ' .. title, '' })
+  -- New buffer is empty storage XHTML; the user can write storage markup or
+  -- use :ConfluencePreview to convert from wiki markup before saving.
+  return open_confluence_buf(page.id, title, { '' })
 end
 
 M.save_page = function()
@@ -178,6 +194,7 @@ M.save_page = function()
 
   local ok, update_err = api.update_page(page_id, title, content)
   if ok then
+    vim.bo[buf].modified = false
     vim.notify('Saved: ' .. title, vim.log.levels.INFO)
   else
     vim.notify('Save failed: ' .. (update_err or ''), vim.log.levels.ERROR)

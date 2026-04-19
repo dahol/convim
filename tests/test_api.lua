@@ -3,18 +3,20 @@
 
 package.loaded['convim.config'] = nil
 package.loaded['convim.api']    = nil
-package.loaded['plenary.http']  = nil
+package.loaded['plenary.curl']  = nil
 
 local config = require('convim.config')
 config.base_url = 'https://test.atlassian.net'
 config.token    = 'test_tok'
+config.email    = 'tester@example.com'
+config.auth     = 'basic'
 
--- ── mock plenary.http ─────────────────────────────────────────────────────────
+-- ── mock plenary.curl ─────────────────────────────────────────────────────────
 
 local captured_requests = {}  -- each entry = { method, url, opts }
 
-local function make_mock_http(responses)
-  -- responses: list of { status, body_table } consumed in order per method+url
+local function make_mock_curl(responses)
+  -- responses: list of { status, body_table } consumed in order per method
   local index = { get = 1, post = 1, put = 1 }
   local mock = {}
   for _, method in ipairs({ 'get', 'post', 'put' }) do
@@ -34,7 +36,7 @@ end
 
 local function reset_api(mock_responses)
   captured_requests = {}
-  package.loaded['plenary.http'] = make_mock_http(mock_responses)
+  package.loaded['plenary.curl'] = make_mock_curl(mock_responses)
   package.loaded['convim.api']   = nil
   return require('convim.api')
 end
@@ -43,13 +45,24 @@ end
 
 local function last_request() return captured_requests[#captured_requests] end
 
+local function find_request(method, pattern)
+  for _, r in ipairs(captured_requests) do
+    if r.method == method and r.url:find(pattern) then return r end
+  end
+  return nil
+end
+
+-- Stock space-lookup response used by get_pages / create_page
+local SPACE_LOOKUP = { status = 200, body = {
+  results = { { id = '424242', key = 'TEST', name = 'Test' } }
+} }
+
 -- ── tests: validate() guard ────────────────────────────────────────────────────
 
--- Each API function should bail out with a validation error if config incomplete
 package.loaded['convim.config'] = nil
 local cfg_bad = require('convim.config')  -- empty config
-package.loaded['convim.api'] = nil
-package.loaded['plenary.http'] = make_mock_http({})
+package.loaded['convim.api']   = nil
+package.loaded['plenary.curl'] = make_mock_curl({})
 local api_bad = require('convim.api')
 
 local r, e = api_bad.get_spaces()
@@ -61,22 +74,43 @@ package.loaded['convim.config'] = nil
 local cfg = require('convim.config')
 cfg.base_url = 'https://test.atlassian.net'
 cfg.token    = 'test_tok'
+cfg.email    = 'tester@example.com'
+cfg.auth     = 'basic'
+
+-- ── tests: auth header building ──────────────────────────────────────────────
+
+local api_auth = reset_api({ get = {{ status = 200, body = { results = {}, _links = {} } }} })
+local _ = api_auth.get_spaces()
+local auth_header = last_request().opts.headers['Authorization']
+assert(auth_header:sub(1, 6) == 'Basic ', 'auth: basic scheme used when configured')
+print('  api: builds Basic auth header for Cloud')
+
+-- Switch to bearer
+cfg.auth = 'bearer'
+local api_bearer = reset_api({ get = {{ status = 200, body = { results = {}, _links = {} } }} })
+api_bearer.get_spaces()
+local bearer_header = last_request().opts.headers['Authorization']
+assert(bearer_header == 'Bearer test_tok', 'auth: bearer scheme uses token directly')
+print('  api: builds Bearer auth header for Data Center')
+
+-- Restore basic for the rest of the tests
+cfg.auth = 'basic'
 
 -- ── tests: get_spaces ─────────────────────────────────────────────────────────
 
-local api = reset_api({
+local api1 = reset_api({
   get = {
     { status = 200, body = { results = {{ key='A', name='Alpha' }, { key='B', name='Beta' }}, _links = {} } },
   }
 })
-local spaces, sp_err = api.get_spaces()
+local spaces, sp_err = api1.get_spaces()
 assert(sp_err == nil,    'get_spaces: no error on 200')
 assert(type(spaces) == 'table', 'get_spaces: returns table')
 assert(#spaces == 2,     'get_spaces: returns all results')
 assert(spaces[1].key == 'A', 'get_spaces: first result correct')
 local req = last_request()
 assert(req.url:find('/wiki/api/v2/spaces'), 'get_spaces: hits correct endpoint')
-assert(req.opts.headers['Authorization']:find('test_tok'), 'get_spaces: sends auth header')
+assert(req.opts.headers['Authorization'], 'get_spaces: sends auth header')
 print('  api: get_spaces() fetches spaces and sends correct request')
 
 -- get_spaces follows pagination cursor
@@ -97,18 +131,35 @@ assert(s3 == nil, 'get_spaces: nil on 401')
 assert(e3 ~= nil and e3:find('401'), 'get_spaces: error message contains status')
 print('  api: get_spaces() surfaces HTTP errors')
 
+-- ── tests: get_space_id_by_key ───────────────────────────────────────────────
+
+local api_sid = reset_api({ get = { SPACE_LOOKUP } })
+local sid, sid_err = api_sid.get_space_id_by_key('TEST')
+assert(sid_err == nil, 'get_space_id_by_key: no error on hit')
+assert(sid == '424242', 'get_space_id_by_key: returns numeric id as string')
+assert(last_request().url:find('keys=TEST'), 'get_space_id_by_key: filters by key in query')
+print('  api: get_space_id_by_key() resolves key to numeric id')
+
+local api_sid_miss = reset_api({ get = {{ status = 200, body = { results = {} } }} })
+local s_miss, s_err = api_sid_miss.get_space_id_by_key('NOPE')
+assert(s_miss == nil, 'get_space_id_by_key: nil when no match')
+assert(s_err:find('NOPE'), 'get_space_id_by_key: error mentions missing key')
+print('  api: get_space_id_by_key() reports missing space')
+
 -- ── tests: get_pages ──────────────────────────────────────────────────────────
 
 local api4 = reset_api({
   get = {
+    SPACE_LOOKUP,
     { status = 200, body = { results = {{ id='1', title='P1' }}, _links = {} } },
   }
 })
 local pages, pg_err = api4.get_pages('TEST')
 assert(pg_err == nil,   'get_pages: no error on 200')
 assert(#pages == 1,     'get_pages: returns result')
-assert(last_request().url:find('/spaces/TEST/pages'), 'get_pages: URL contains space key')
-print('  api: get_pages() fetches pages for given space')
+assert(find_request('get', '/spaces/424242/pages'),
+  'get_pages: URL contains resolved space ID, not key')
+print('  api: get_pages() resolves space key then fetches pages')
 
 -- ── tests: get_page_content ───────────────────────────────────────────────────
 
@@ -137,18 +188,21 @@ local ok, up_err = api6.update_page('42', 'New Title', '<p>Updated</p>')
 assert(ok == true,   'update_page: returns true on success')
 assert(up_err == nil, 'update_page: no error on success')
 
--- verify PUT was used
-local put_req = nil
-for _, r2 in ipairs(captured_requests) do
-  if r2.method == 'put' then put_req = r2 end
-end
+local put_req = find_request('put', '/wiki/api/v2/pages/42')
 assert(put_req ~= nil, 'update_page: uses PUT method')
+assert(put_req.opts.headers['Content-Type'] == 'application/json',
+  'update_page: sends application/json content-type')
 
--- verify version was incremented
+-- verify version was incremented and body shape is correct
 local put_body = vim.fn.json_decode(put_req.opts.body)
 assert(put_body.version.number == 4, 'update_page: version number is current+1 (3+1=4)')
 assert(put_body.title == 'New Title', 'update_page: title in PUT body')
-print('  api: update_page() uses PUT, increments version number')
+assert(put_body.body.representation == 'storage',
+  'update_page: body.representation is storage')
+assert(put_body.body.value == '<p>Updated</p>',
+  'update_page: body.value is the new content')
+assert(put_body.id == '42', 'update_page: id is stringified page_id')
+print('  api: update_page() uses PUT, increments version, correct body shape')
 
 -- update_page propagates error when version fetch fails
 local api7 = reset_api({ get = {{ status = 404, body = {} }} })
@@ -159,24 +213,44 @@ print('  api: update_page() propagates version-fetch errors')
 
 -- ── tests: create_page ────────────────────────────────────────────────────────
 
-local api8 = reset_api({ post = {{ status = 201, body = { id='99', title='New' } }} })
+local api8 = reset_api({
+  get  = { SPACE_LOOKUP },
+  post = {{ status = 201, body = { id='99', title='New' } }},
+})
 local new_page, create_err = api8.create_page('TEST', 'New', '<p/>')
 assert(create_err == nil,  'create_page: no error on 201')
 assert(new_page.id == '99', 'create_page: returns created page')
-local post_req = nil
-for _, r3 in ipairs(captured_requests) do
-  if r3.method == 'post' then post_req = r3 end
-end
+
+local post_req = find_request('post', '/wiki/api/v2/pages')
 assert(post_req ~= nil, 'create_page: uses POST method')
-print('  api: create_page() POSTs and returns new page')
+local post_body = vim.fn.json_decode(post_req.opts.body)
+assert(post_body.spaceId == '424242',
+  'create_page: spaceId is the resolved numeric ID, not the key')
+assert(post_body.title == 'New', 'create_page: title in POST body')
+assert(post_body.body.representation == 'storage',
+  'create_page: body.representation is storage')
+print('  api: create_page() resolves key->id, POSTs with correct payload')
+
+-- ── tests: search_pages URL escaping ─────────────────────────────────────────
+
+local api_search = reset_api({
+  get = {{ status = 200, body = { results = {{ id='1', title='Found' }} } }}
+})
+local res, serr = api_search.search_pages('hello world', nil)
+assert(serr == nil and #res == 1, 'search_pages: returns results')
+local search_req = last_request()
+-- spaces in CQL must be percent-encoded
+assert(search_req.url:find('hello%%20world') or search_req.url:find('hello%+world'),
+  'search_pages: query is URL-encoded')
+print('  api: search_pages() URL-encodes the CQL query')
 
 -- ── tests: verify_auth ───────────────────────────────────────────────────────
 
 -- verify_auth: missing config returns ok=false with message
 package.loaded['convim.config'] = nil
 local cfg_va = require('convim.config')  -- empty
-package.loaded['convim.api'] = nil
-package.loaded['plenary.http'] = make_mock_http({})
+package.loaded['convim.api']   = nil
+package.loaded['plenary.curl'] = make_mock_curl({})
 local api_va_bad = require('convim.api')
 local bad_result = api_va_bad.verify_auth()
 assert(bad_result.ok == false, 'verify_auth: ok=false when config missing')
@@ -188,6 +262,8 @@ package.loaded['convim.config'] = nil
 local cfg_va2 = require('convim.config')
 cfg_va2.base_url = 'https://test.atlassian.net'
 cfg_va2.token    = 'test_tok'
+cfg_va2.email    = 'tester@example.com'
+cfg_va2.auth     = 'basic'
 
 -- verify_auth: 200 probe + 200 user → ok=true with user name
 local api_va_ok = reset_api({
@@ -220,8 +296,7 @@ assert(r403.status == 403, 'verify_auth: status=403')
 print('  api: verify_auth() returns ok=false with 403 message on insufficient permissions')
 
 -- verify_auth: network error (pcall catches) → ok=false
-local api_va_net = reset_api({})
-package.loaded['plenary.http'] = {
+package.loaded['plenary.curl'] = {
   get = function() error('connection refused') end,
 }
 package.loaded['convim.api'] = nil

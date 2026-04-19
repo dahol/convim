@@ -1,18 +1,29 @@
-local http = require('plenary.http')
+local curl = require('plenary.curl')
 local config = require('convim.config')
 
 local M = {}
 
 --- Build the standard auth/accept headers.
+--- Returns headers table, or nil + err if auth could not be built.
 local function headers(extra)
+  local auth, err = config.auth_header()
+  if not auth then return nil, err end
   local h = {
-    ['Authorization'] = 'Bearer ' .. (config.token or ''),
-    ['Accept'] = 'application/json',
+    ['Authorization'] = auth,
+    ['Accept']        = 'application/json',
   }
   if extra then
     for k, v in pairs(extra) do h[k] = v end
   end
-  return h
+  return h, nil
+end
+
+--- URL-encode a string for use in a query parameter value.
+local function url_encode(s)
+  if vim.uri_encode then return vim.uri_encode(s) end
+  return (s:gsub('[^%w%-_.~]', function(c)
+    return string.format('%%%02X', string.byte(c))
+  end))
 end
 
 --- Fetch all pages of a paginated Confluence v2 endpoint.
@@ -31,7 +42,7 @@ local function fetch_all(url, opts)
       paged_url = url .. (url:find('?') and '&' or '?') .. table.concat(params, '&')
     end
 
-    local response = http.get(paged_url, { headers = opts.headers })
+    local response = curl.get(paged_url, { headers = opts.headers })
     if not response or response.status ~= 200 then
       local msg = (response and response.status) or 'no response'
       return nil, string.format('HTTP %s from %s', msg, paged_url)
@@ -57,11 +68,6 @@ local function fetch_all(url, opts)
 end
 
 --- Verify that the configured credentials can reach the Confluence instance.
---- Makes a single lightweight GET to /wiki/api/v2/spaces?limit=1 and reports:
----   - The authenticated user's display name (from the X-Ausername header or
----     a separate /wiki/rest/api/user/current call)
----   - The base URL being used
----   - The HTTP status returned
 --- Returns a result table { ok, user, status, message }, never raises.
 M.verify_auth = function()
   local cfg_err = config.validate()
@@ -69,12 +75,16 @@ M.verify_auth = function()
     return { ok = false, message = cfg_err }
   end
 
+  local hdrs, herr = headers()
+  if not hdrs then
+    return { ok = false, message = herr }
+  end
+
   -- Probe the spaces endpoint with limit=1 — cheap and requires auth
   local probe_url = config.base_url .. '/wiki/api/v2/spaces?limit=1'
-  local ok, response = pcall(http.get, probe_url, { headers = headers() })
+  local ok, response = pcall(curl.get, probe_url, { headers = hdrs })
 
   if not ok then
-    -- pcall caught a Lua error (e.g. network completely unreachable)
     return {
       ok = false,
       message = 'Network error: ' .. tostring(response),
@@ -112,7 +122,7 @@ M.verify_auth = function()
   -- Auth succeeded — fetch the current user for a friendly confirmation
   local user = 'unknown'
   local user_url = config.base_url .. '/wiki/rest/api/user/current'
-  local u_ok, u_resp = pcall(http.get, user_url, { headers = headers() })
+  local u_ok, u_resp = pcall(curl.get, user_url, { headers = hdrs })
   if u_ok and u_resp and u_resp.status == 200 then
     local dec_ok, data = pcall(vim.fn.json_decode, u_resp.body)
     if dec_ok and data then
@@ -130,40 +140,77 @@ M.verify_auth = function()
 end
 
 --- Return all spaces the token has access to.
---- Returns list, error_msg
 M.get_spaces = function()
   local err = config.validate()
   if err then return nil, err end
 
+  local hdrs, herr = headers()
+  if not hdrs then return nil, herr end
+
   local url = string.format('%s/wiki/api/v2/spaces', config.base_url)
-  return fetch_all(url, { headers = headers() })
+  return fetch_all(url, { headers = hdrs })
 end
 
---- Return all pages in the given space.
---- Returns list, error_msg
+--- Resolve a human-readable space key (e.g. "ENG") to the numeric v2 space ID.
+--- Confluence v2 endpoints that mutate or filter by space require the ID,
+--- not the key.  Returns id (string), nil on success; nil, err on failure.
+M.get_space_id_by_key = function(space_key)
+  local err = config.validate()
+  if err then return nil, err end
+
+  local hdrs, herr = headers()
+  if not hdrs then return nil, herr end
+
+  local url = string.format('%s/wiki/api/v2/spaces?keys=%s&limit=1',
+    config.base_url, url_encode(space_key))
+  local response = curl.get(url, { headers = hdrs })
+  if not response or response.status ~= 200 then
+    local status = response and response.status or 'no response'
+    return nil, string.format('HTTP %s resolving space key %s', status, space_key)
+  end
+  local ok, data = pcall(vim.fn.json_decode, response.body)
+  if not ok then return nil, 'Failed to decode space lookup response' end
+  local first = data.results and data.results[1]
+  if not first or not first.id then
+    return nil, string.format('No space found with key %q', space_key)
+  end
+  return tostring(first.id), nil
+end
+
+--- Return all pages in the given space (accepts space key; resolves to ID).
 M.get_pages = function(space_key)
   local err = config.validate()
   if err then return nil, err end
 
-  local url = string.format('%s/wiki/api/v2/spaces/%s/pages', config.base_url, space_key)
-  return fetch_all(url, { headers = headers() })
+  local hdrs, herr = headers()
+  if not hdrs then return nil, herr end
+
+  local space_id, sid_err = M.get_space_id_by_key(space_key)
+  if not space_id then return nil, sid_err end
+
+  local url = string.format('%s/wiki/api/v2/spaces/%s/pages', config.base_url, space_id)
+  return fetch_all(url, { headers = hdrs })
 end
 
 --- Search pages by title in the current space (or globally if space_key is nil).
---- Returns list, error_msg
 M.search_pages = function(query, space_key)
   local err = config.validate()
   if err then return nil, err end
 
-  local cql = string.format('type=page AND title~"%s"', query)
+  local hdrs, herr = headers()
+  if not hdrs then return nil, herr end
+
+  -- Escape embedded double quotes inside the CQL value.
+  local safe_q = query:gsub('"', '\\"')
+  local cql = string.format('type=page AND title~"%s"', safe_q)
   if space_key and space_key ~= '' then
     cql = cql .. string.format(' AND space.key="%s"', space_key)
   end
 
   local url = string.format('%s/wiki/rest/api/content/search?cql=%s',
-    config.base_url, vim.fn.shellescape and vim.uri_encode and vim.uri_encode(cql) or cql)
+    config.base_url, url_encode(cql))
 
-  local response = http.get(url, { headers = headers() })
+  local response = curl.get(url, { headers = hdrs })
   if not response or response.status ~= 200 then
     local status = response and response.status or 'no response'
     return nil, string.format('HTTP %s', status)
@@ -174,13 +221,15 @@ M.search_pages = function(query, space_key)
 end
 
 --- Fetch a single page with its body in storage format.
---- Returns page table, error_msg
 M.get_page_content = function(page_id)
   local err = config.validate()
   if err then return nil, err end
 
+  local hdrs, herr = headers()
+  if not hdrs then return nil, herr end
+
   local url = string.format('%s/wiki/api/v2/pages/%s?body-format=storage', config.base_url, page_id)
-  local response = http.get(url, { headers = headers() })
+  local response = curl.get(url, { headers = hdrs })
   if not response or response.status ~= 200 then
     local status = response and response.status or 'no response'
     return nil, string.format('HTTP %s fetching page %s', status, page_id)
@@ -190,27 +239,35 @@ M.get_page_content = function(page_id)
   return data, nil
 end
 
---- Create a new page in the given space under the given parent (optional).
---- Returns the created page table, error_msg
+--- Create a new page in the given space (key) under the given parent (optional).
+--- Resolves space key → space ID before POSTing.
 M.create_page = function(space_key, title, content, parent_id)
   local err = config.validate()
   if err then return nil, err end
 
+  local hdrs, herr = headers({ ['Content-Type'] = 'application/json' })
+  if not hdrs then return nil, herr end
+
+  local space_id, sid_err = M.get_space_id_by_key(space_key)
+  if not space_id then return nil, sid_err end
+
   local url = string.format('%s/wiki/api/v2/pages', config.base_url)
   local payload = {
-    spaceId = space_key,
-    title = title,
-    body = {
-      storage = { value = content, representation = 'storage' },
+    spaceId = space_id,
+    status  = 'current',
+    title   = title,
+    body    = {
+      representation = 'storage',
+      value          = content,
     },
   }
   if parent_id then
-    payload.parentId = parent_id
+    payload.parentId = tostring(parent_id)
   end
 
-  local response = http.post(url, {
-    headers = headers({ ['Content-Type'] = 'application/json' }),
-    body = vim.fn.json_encode(payload),
+  local response = curl.post(url, {
+    headers = hdrs,
+    body    = vim.fn.json_encode(payload),
   })
   if not response or (response.status ~= 200 and response.status ~= 201) then
     local status = response and response.status or 'no response'
@@ -222,8 +279,10 @@ M.create_page = function(space_key, title, content, parent_id)
 end
 
 --- Update an existing page. Automatically fetches the current version and increments it.
---- Returns true, nil on success; nil, error_msg on failure.
 M.update_page = function(page_id, title, content)
+  local hdrs, herr = headers({ ['Content-Type'] = 'application/json' })
+  if not hdrs then return nil, herr end
+
   -- First fetch the current version number
   local page, fetch_err = M.get_page_content(page_id)
   if not page then
@@ -234,17 +293,19 @@ M.update_page = function(page_id, title, content)
   local url = string.format('%s/wiki/api/v2/pages/%s', config.base_url, page_id)
 
   local payload = {
-    id = page_id,
-    title = title,
-    body = {
-      storage = { value = content, representation = 'storage' },
+    id      = tostring(page_id),
+    status  = 'current',
+    title   = title,
+    body    = {
+      representation = 'storage',
+      value          = content,
     },
     version = { number = current_version + 1 },
   }
 
-  local response = http.put(url, {
-    headers = headers({ ['Content-Type'] = 'application/json' }),
-    body = vim.fn.json_encode(payload),
+  local response = curl.put(url, {
+    headers = hdrs,
+    body    = vim.fn.json_encode(payload),
   })
   if not response or response.status ~= 200 then
     local status = response and response.status or 'no response'

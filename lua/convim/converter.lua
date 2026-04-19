@@ -1,35 +1,43 @@
-local http = require('plenary.http')
+local curl = require('plenary.curl')
 local config = require('convim.config')
 
 local M = {}
 
---- Convert a Markdown string to Confluence storage format (XHTML) using the
---- Confluence render API.  Returns the converted string, or nil + error_msg.
-M.to_storage = function(markdown_content)
+--- Convert a Markdown (or wiki-markup) string to Confluence storage format
+--- (XHTML) using the contentbody/convert/storage endpoint.
+--- Note: Confluence's converter accepts representations 'wiki', 'editor',
+--- 'editor2', 'view' — *not* 'markdown' directly.  We send wiki markup, which
+--- is the closest builtin representation; callers wanting true markdown should
+--- pre-convert with an external tool.
+--- Returns the converted string, or nil + error_msg.
+M.to_storage = function(source, from_representation)
   local err = config.validate()
   if err then return nil, err end
 
-  local url = string.format('%s/wiki/api/v2/pages/render', config.base_url)
-  local response = http.post(url, {
+  local auth, aerr = config.auth_header()
+  if not auth then return nil, aerr end
+
+  local url = string.format('%s/wiki/rest/api/contentbody/convert/storage', config.base_url)
+  local response = curl.post(url, {
     headers = {
-      ['Authorization'] = 'Bearer ' .. config.token,
-      ['Accept'] = 'application/json',
-      ['Content-Type'] = 'application/json',
+      ['Authorization'] = auth,
+      ['Accept']        = 'application/json',
+      ['Content-Type']  = 'application/json',
     },
     body = vim.fn.json_encode({
-      value = markdown_content,
-      representation = 'markdown',
+      value          = source,
+      representation = from_representation or 'wiki',
     }),
   })
 
   if not response or response.status ~= 200 then
     local status = response and response.status or 'no response'
-    return nil, string.format('HTTP %s from render endpoint', status)
+    return nil, string.format('HTTP %s from convert endpoint', status)
   end
 
   local ok, data = pcall(vim.fn.json_decode, response.body)
   if not ok or not data.value then
-    return nil, 'Failed to decode render response'
+    return nil, 'Failed to decode convert response'
   end
   return data.value, nil
 end

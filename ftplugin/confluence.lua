@@ -1,10 +1,14 @@
 -- Loaded for buffers with filetype=confluence (set either by ftdetect for
 -- *.confluence files, or by convim itself when opening a page from the API).
 
--- Treat confluence buffers as markdown for syntax highlighting and LSP
-vim.bo.syntax = 'markdown'
-
 local buf = vim.api.nvim_get_current_buf()
+
+-- Treat confluence buffers as markdown for syntax highlighting (buffer-local).
+-- Skip if the user has already configured something else.
+if vim.bo[buf].syntax == '' or vim.bo[buf].syntax == 'confluence' then
+  vim.bo[buf].syntax = 'markdown'
+end
+
 local ok, page_id = pcall(vim.api.nvim_buf_get_var, buf, 'confluence_page_id')
 
 if ok and page_id then
