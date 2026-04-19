@@ -35,16 +35,24 @@ local function open_confluence_buf(page_id, title, lines)
   -- and the next open of the same page will trigger E325 (ATTENTION swap exists).
   vim.bo[buf].swapfile  = false
   vim.bo[buf].buftype   = 'acwrite'   -- 'we handle the write ourselves'
-  vim.bo[buf].bufhidden = 'wipe'
   vim.bo[buf].buflisted = true
+  -- NB: do NOT set bufhidden='wipe'.  The picker (telescope) closes its
+  -- own prompt buffer right before invoking on_select, which can shift
+  -- focus and cause a wipe-marked buffer to be torn down mid-setup,
+  -- producing 'Invalid buffer id' on subsequent api calls.  Default
+  -- ('hide' for listed buffers) is what we want — user controls cleanup
+  -- via :bd.
 
   vim.api.nvim_buf_set_name(buf, bufname)
-  vim.api.nvim_set_current_buf(buf)
+  -- Populate before showing.  If anything in the autocmd chain triggered
+  -- by nvim_set_current_buf decides to inspect or wipe buffers, the
+  -- content is already in place.
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].filetype  = 'confluence'
   vim.bo[buf].modified  = false
   vim.api.nvim_buf_set_var(buf, 'confluence_page_id', page_id)
   vim.api.nvim_buf_set_var(buf, 'confluence_title', title)
+  vim.api.nvim_set_current_buf(buf)
 
   -- Wire :w / :wq / :update to ConfluenceSave for this buffer only.
   vim.api.nvim_create_autocmd('BufWriteCmd', {
