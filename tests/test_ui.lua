@@ -5,6 +5,7 @@
 package.loaded['convim.config']  = nil
 package.loaded['convim.api']     = nil
 package.loaded['convim.ui']      = nil
+package.loaded['convim.format']  = nil
 package.loaded['plenary.curl']   = nil
 
 local config = require('convim.config')
@@ -14,6 +15,7 @@ config.space_key = 'TEST'
 
 -- ── stubbed Confluence API ────────────────────────────────────────────────────
 
+local last_update = nil
 local stub_api = {
   get_spaces = function()
     return { { key = 'A', name = 'Alpha' }, { key = 'B', name = 'Beta' } }, nil
@@ -29,12 +31,13 @@ local stub_api = {
       return {
         id = '1', title = 'Page One',
         version = { number = 5 },
-        body = { storage = { value = '<p>Hello from page 1</p>' } },
+        body = { storage = { value = '<h1 local-id="abc">Title</h1><p>Hello from page 1</p>' } },
       }, nil
     end
     return nil, 'not found'
   end,
   update_page = function(page_id, title, content)
+    last_update = { page_id = page_id, title = title, content = content }
     return true, nil
   end,
   create_page = function(space_key, title, content, parent_id)
@@ -98,7 +101,9 @@ assert(buf_var(new_buf, 'confluence_title') == 'Page One', 'edit_page: title var
 local lines = get_buf_lines(new_buf)
 local content = table.concat(lines, '\n')
 assert(content:find('Hello from page 1'), 'edit_page: page content in buffer')
-print('  ui: edit_page() creates buffer with correct content and vars')
+assert(#lines > 1, 'edit_page: storage XHTML is pretty-printed across multiple lines')
+assert(not content:find('local%-id'), 'edit_page: local-id attributes stripped on read')
+print('  ui: edit_page() pretty-prints storage XHTML and strips local-id')
 
 -- edit_page notifies and returns nil for unknown page
 local ui3 = reload_ui()
@@ -123,12 +128,16 @@ vim.api.nvim_buf_set_lines(save_buf, 0, -1, false, { '<p>Updated content</p>' })
 local save_notify_msg = nil
 local orig_notify2 = vim.notify
 vim.notify = function(msg, _) save_notify_msg = msg end
+last_update = nil
 ui4.save_page()
 vim.notify = orig_notify2
 assert(save_notify_msg ~= nil, 'save_page: emits notification')
 assert(save_notify_msg:find('Saved') or save_notify_msg:find('Page One'),
   'save_page: success notification mentions page')
-print('  ui: save_page() saves and notifies success')
+assert(last_update ~= nil, 'save_page: forwards to api.update_page')
+assert(not last_update.content:find('\n'),
+  'save_page: content sent to API is compacted (single line, no newlines)')
+print('  ui: save_page() compacts buffer to single line before sending to API')
 
 -- save_page warns on non-confluence buffer
 local ui5 = reload_ui()

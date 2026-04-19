@@ -1,5 +1,6 @@
 local api = require('convim.api')
 local config = require('convim.config')
+local format = require('convim.format')
 
 local M = {}
 
@@ -146,8 +147,9 @@ M.edit_page = function(page_id)
   local title = page.title or 'Untitled'
   local storage_value = (page.body and page.body.storage and page.body.storage.value) or ''
 
-  -- Split storage content into lines for the buffer
-  local lines = vim.split(storage_value, '\n', { plain = true })
+  -- Pretty-print storage XHTML for editing (newlines + indent, drop local-id).
+  local pretty = format.pretty(storage_value)
+  local lines = vim.split(pretty, '\n', { plain = true })
   return open_confluence_buf(page_id, title, lines)
 end
 
@@ -190,7 +192,9 @@ M.save_page = function()
 
   local title = buf_get_var(buf, 'confluence_title') or 'Untitled'
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-  local content = table.concat(lines, '\n')
+  -- Re-compact the pretty-printed buffer back to a single-line storage string
+  -- before sending to Confluence.
+  local content = format.compact(table.concat(lines, '\n'))
 
   local ok, update_err = api.update_page(page_id, title, content)
   if ok then

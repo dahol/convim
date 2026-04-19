@@ -3,10 +3,11 @@
 
 local buf = vim.api.nvim_get_current_buf()
 
--- Treat confluence buffers as markdown for syntax highlighting (buffer-local).
+-- Treat confluence buffers as html for syntax highlighting (buffer-local).
+-- Storage format IS XHTML, so html highlighting is the closest builtin match.
 -- Skip if the user has already configured something else.
 if vim.bo[buf].syntax == '' or vim.bo[buf].syntax == 'confluence' then
-  vim.bo[buf].syntax = 'markdown'
+  vim.bo[buf].syntax = 'html'
 end
 
 local ok, page_id = pcall(vim.api.nvim_buf_get_var, buf, 'confluence_page_id')
