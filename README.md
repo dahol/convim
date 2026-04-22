@@ -1,4 +1,4 @@
-# convim — Neovim Confluence Editor
+# convim — Neovim AiSlop Confluence Editor
 
 Edit Confluence pages directly in Neovim. Fetches page content from the
 Confluence REST API v2, opens it in a scratch buffer, and writes it back on
