@@ -37,7 +37,7 @@ save.
 
 ```lua
 {
-  "anomalyco/convim",
+  "dahol/convim",
   dependencies = { "nvim-lua/plenary.nvim" },
   config = function()
     require("convim").setup({
@@ -53,7 +53,7 @@ save.
 
 ```lua
 use {
-  "anomalyco/convim",
+  "dahol/convim",
   requires = { "nvim-lua/plenary.nvim" },
 }
 ```
