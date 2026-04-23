@@ -192,6 +192,30 @@ M.get_pages = function(space_key)
   return fetch_all(url, { headers = hdrs })
 end
 
+--- Scan and cache all pages across all accessible spaces.
+--- Returns the cached page list.
+M.scan_all_pages = function()
+  local err = config.validate()
+  if err then return nil, err end
+
+  local spaces, spaces_err = M.get_spaces()
+  if not spaces then return nil, 'Failed to fetch spaces: ' .. (spaces_err or '') end
+
+  local all_pages = {}
+
+  for _, space in ipairs(spaces) do
+    local pages, pages_err = M.get_pages(space.key)
+    if pages then
+      for _, page in ipairs(pages) do
+        page._space_key = space.key
+        table.insert(all_pages, page)
+      end
+    end
+  end
+
+  return all_pages, nil
+end
+
 --- Search pages by title in the current space (or globally if space_key is nil).
 M.search_pages = function(query, space_key)
   local err = config.validate()

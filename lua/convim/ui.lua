@@ -107,6 +107,33 @@ local function open_confluence_buf(page_id, title, lines, opts)
   return buf
 end
 
+--- Page cache for scanned results
+local cached_pages = nil
+local cache_timestamp = nil
+
+--- Set the page cache (for scan results)
+M.set_cache = function(pages, timestamp)
+  cached_pages = pages
+  cache_timestamp = timestamp
+end
+
+--- Get the cached pages and timestamp
+M.get_cache = function()
+  return cached_pages, cache_timestamp
+end
+
+local function refresh_cache()
+  local pages, err = api.scan_all_pages()
+  if pages then
+    cached_pages = pages
+    cache_timestamp = os.date('%Y-%m-%d %H:%M:%S')
+    return true
+  else
+    vim.notify('Failed to scan Confluence: ' .. (err or ''), vim.log.levels.ERROR)
+    return false
+  end
+end
+
 M.list_spaces = function()
   local err = config.validate()
   if err then vim.notify(err, vim.log.levels.ERROR) return end
@@ -174,37 +201,75 @@ M.search_pages = function(query)
   local err = config.validate()
   if err then vim.notify(err, vim.log.levels.ERROR) return end
 
-  local on_pick = function(page) M.edit_page(page.id) end
+  -- If no query provided, show all cached pages (or scan first if cache is empty)
+  if not query or query == '' then
+    if not cached_pages then
+      if not refresh_cache() then return end
+    end
+    
+    local on_pick = function(page) M.edit_page(page.id) end
 
-  -- Telescope path: live, incremental search inside a floating window.
-  -- The query (if any) seeds the prompt; further keystrokes re-query the API.
-  if picker.search_pages(api, config.space_key, query, on_pick) then
+    -- Prefer telescope picker; fall back to vim.ui.select
+    if picker.list_pages(cached_pages, 'Confluence pages', on_pick) then
+      return
+    end
+
+    if #cached_pages == 0 then
+      vim.notify('No pages in Confluence space(s)', vim.log.levels.INFO)
+      return
+    end
+
+    vim.ui.select(cached_pages, {
+      prompt = 'All Confluence pages (cached: ' .. (cache_timestamp or 'unknown') .. '):',
+      format_item = function(page)
+        local space = page._space_key and ('[' .. page._space_key .. '] ') or ''
+        return space .. (page.title or page.id)
+      end,
+    }, function(page)
+      if page then on_pick(page) end
+    end)
     return
   end
 
-  -- Fallback: prompt for a query, then list results via vim.ui.select.
-  if not query or query == '' then
+  -- If query is provided, search/filter the cached pages
+  local filtered_pages = {}
+  for _, page in ipairs(cached_pages or {}) do
+    local title = page.title or ''
+    if title:lower():find(query:lower()) then
+      table.insert(filtered_pages, page)
+    end
+  end
+
+  -- If no cache yet or query not found in cache, try API search
+  if #filtered_pages == 0 and cached_pages ~= nil then
+    local on_pick = function(page) M.edit_page(page.id) end
+
+    if picker.search_pages(api, config.space_key, query, on_pick) then
+      return
+    end
+
     vim.ui.input({ prompt = 'Search pages: ' }, function(input)
       if input and input ~= '' then M.search_pages(input) end
     end)
     return
   end
 
-  local results, search_err = api.search_pages(query, config.space_key)
-  if not results then
-    vim.notify('Search failed: ' .. (search_err or ''), vim.log.levels.ERROR)
-    return
-  end
-
-  if #results == 0 then
+  -- Show filtered results from cache
+  local on_pick = function(page) M.edit_page(page.id) end
+  
+  if #filtered_pages == 0 then
     vim.notify('No pages found matching: ' .. query, vim.log.levels.WARN)
     return
   end
 
-  vim.ui.select(results, {
+  if picker.list_pages(filtered_pages, 'Search results', on_pick) then
+    return
+  end
+
+  vim.ui.select(filtered_pages, {
     prompt = 'Search results:',
     format_item = function(page)
-      local space = page.space and ('[' .. page.space.key .. '] ') or ''
+      local space = page._space_key and ('[' .. page._space_key .. '] ') or ''
       return space .. (page.title or page.id)
     end,
   }, function(page)
@@ -251,7 +316,7 @@ end
 
 --- Open a page in raw storage-XHTML mode (no markdown round-trip).  Useful as
 --- an escape hatch when the markdown view loses fidelity for a particular
---- page; what you save is exactly what you see.
+--- page; what you see is exactly what you save.
 M.edit_page_raw = function(page_id)
   local err = config.validate()
   if err then vim.notify(err, vim.log.levels.ERROR) return end
