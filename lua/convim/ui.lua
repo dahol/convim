@@ -111,6 +111,10 @@ end
 local cached_pages = nil
 local cache_timestamp = nil
 
+--- Search result cache (query -> pages mapping)
+local search_cache = {}
+local MAX_SEARCH_CACHE_AGE = 300 -- 5 minutes in seconds
+
 --- Set the page cache (for scan results)
 M.set_cache = function(pages, timestamp)
   cached_pages = pages
@@ -120,6 +124,40 @@ end
 --- Get the cached pages and timestamp
 M.get_cache = function()
   return cached_pages, cache_timestamp
+end
+
+--- Store search results in cache
+local function cache_search_results(query, space_key, results)
+  local key = query .. '|' .. (space_key or '')
+  search_cache[key] = {
+    results = results,
+    timestamp = os.time(),
+  }
+end
+
+--- Get cached search results if not expired
+local function get_cached_search_results(query, space_key)
+  local key = query .. '|' .. (space_key or '')
+  local cached = search_cache[key]
+  if not cached then return nil end
+  
+  local age = os.difftime(os.time(), cached.timestamp)
+  if age > MAX_SEARCH_CACHE_AGE then
+    return nil
+  end
+  
+  return cached.results
+end
+
+--- Clear old cache entries
+local function cleanup_old_search_cache()
+  local current_time = os.time()
+  for key, cached in pairs(search_cache) do
+    local age = os.difftime(current_time, cached.timestamp)
+    if age > MAX_SEARCH_CACHE_AGE then
+      search_cache[key] = nil
+    end
+  end
 end
 
 local function refresh_cache()
@@ -204,7 +242,20 @@ M.search_pages = function(query)
   -- If no query provided, show all cached pages (or scan first if cache is empty)
   if not query or query == '' then
     if not cached_pages then
-      if not refresh_cache() then return end
+      vim.notify('Fetching Confluence pages...', vim.log.levels.INFO)
+      convim.api.scan_all_pages({
+        callback = function(pages, err)
+          if err then
+            vim.notify('Scan failed: ' .. err, vim.log.levels.ERROR)
+            return
+          end
+          M.set_cache(pages, os.date('%Y-%m-%d %H:%M:%S'))
+          cleanup_old_search_cache()
+          vim.notify('Confluence scan complete: ' .. #pages .. ' page(s) indexed', vim.log.levels.INFO)
+          M.search_pages(nil)
+        end,
+      })
+      return
     end
     
     local on_pick = function(page) M.edit_page(page.id) end
@@ -240,18 +291,51 @@ M.search_pages = function(query)
     end
   end
 
-  -- If no cache yet or query not found in cache, try API search
+  -- If no cache yet or query not found in cache, try API search with caching
   if #filtered_pages == 0 and cached_pages ~= nil then
-    local on_pick = function(page) M.edit_page(page.id) end
+    local cached_results = get_cached_search_results(query, config.space_key)
+    
+    if cached_results then
+      vim.notify('Using cached results for "' .. query .. '"', vim.log.levels.INFO)
+      filtered_pages = cached_results
+    else
+      vim.notify('Searching Confluence for "' .. query .. '"...', vim.log.levels.INFO)
+      convim.api.search_pages(query, config.space_key, {
+        callback = function(results, err)
+          if err then
+            vim.notify('Search failed: ' .. err, vim.log.levels.ERROR)
+            return
+          end
+          
+          cache_search_results(query, config.space_key, results)
+          cleanup_old_search_cache()
+          
+          if #results == 0 then
+            vim.notify('No pages found matching: ' .. query, vim.log.levels.WARN)
+            return
+          end
+          
+          vim.notify('Found ' .. #results .. ' page(s) matching "' .. query .. '"', vim.log.levels.INFO)
+          
+          local on_pick = function(page) M.edit_page(page.id) end
+          
+          if picker.list_pages(results, 'Search results', on_pick) then
+            return
+          end
 
-    if picker.search_pages(api, config.space_key, query, on_pick) then
+          vim.ui.select(results, {
+            prompt = 'Search results:',
+            format_item = function(page)
+              local space = page._space_key and ('[' .. page._space_key .. '] ') or ''
+              return space .. (page.title or page.id)
+            end,
+          }, function(page)
+            if page then on_pick(page) end
+          end)
+        end,
+      })
       return
     end
-
-    vim.ui.input({ prompt = 'Search pages: ' }, function(input)
-      if input and input ~= '' then M.search_pages(input) end
-    end)
-    return
   end
 
   -- Show filtered results from cache
