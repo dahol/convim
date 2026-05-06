@@ -193,88 +193,56 @@ M.get_pages = function(space_key)
 end
 
 --- Scan and cache all pages across all accessible spaces.
---- Returns the cached page list. If callback is provided, runs asynchronously
---- and calls callback(pages, err) when complete.
-M.scan_all_pages = function(opts)
-  local opts = opts or {}
-  local callback = opts.callback
-  
-  local function run_scan()
-    local err = config.validate()
-    if err then return nil, err end
+M.scan_all_pages = function()
+  local err = config.validate()
+  if err then return nil, err end
 
-    local spaces, spaces_err = M.get_spaces()
-    if not spaces then return nil, 'Failed to fetch spaces: ' .. (spaces_err or '') end
+  local spaces, spaces_err = M.get_spaces()
+  if not spaces then return nil, 'Failed to fetch spaces: ' .. (spaces_err or '') end
 
-    local all_pages = {}
+  local all_pages = {}
 
-    for _, space in ipairs(spaces) do
-      local pages, pages_err = M.get_pages(space.key)
-      if pages then
-        for _, page in ipairs(pages) do
-          page._space_key = space.key
-          table.insert(all_pages, page)
-        end
+  for _, space in ipairs(spaces) do
+    local pages, pages_err = M.get_pages(space.key)
+    if pages then
+      for _, page in ipairs(pages) do
+        page._space_key = space.key
+        table.insert(all_pages, page)
       end
     end
+  end
 
-    return all_pages, nil
-  end
-  
-  if callback then
-    local pages, err = run_scan()
-    vim.schedule(function()
-      callback(pages, err)
-    end)
-    return
-  else
-    return run_scan()
-  end
+  return all_pages, nil
 end
 
 --- Search pages by title in the current space (or globally if space_key is nil).
---- If callback is provided, runs asynchronously and calls callback(results, err) when complete.
-M.search_pages = function(query, space_key, opts)
-  local opts = opts or {}
-  local callback = opts.callback
-  
-  local function run_search()
-    local err = config.validate()
-    if err then return nil, err end
+M.search_pages = function(query, space_key)
+  local err = config.validate()
+  if err then return nil, err end
 
-    local hdrs, herr = headers()
-    if not hdrs then return nil, herr end
+  local hdrs, herr = headers()
+  if not hdrs then return nil, herr end
 
-    -- Escape embedded double quotes inside the CQL value.
-    local safe_q = query:gsub('"', '\\"')
-    local cql = string.format('type=page AND title~"%s"', safe_q)
-    if space_key and space_key ~= '' then
-      cql = cql .. string.format(' AND space.key="%s"', space_key)
-    end
-
-    local url = string.format('%s/wiki/rest/api/content/search?cql=%s',
-      config.base_url, url_encode(cql))
-
-    local response = curl.get(url, { headers = hdrs })
-    if not response or response.status ~= 200 then
-      local status = response and response.status or 'no response'
-      return nil, string.format('HTTP %s', status)
-    end
-    local ok, data = pcall(vim.fn.json_decode, response.body)
-    if not ok then return nil, 'Failed to decode search response' end
-    return data.results or {}, nil
+  -- Escape embedded double quotes inside the CQL value.
+  local safe_q = query:gsub('"', '\\\"')
+  local cql = string.format('type=page AND title~"%s"', safe_q)
+  if space_key and space_key ~= '' then
+    cql = cql .. string.format(' AND space.key="%s"', space_key)
   end
-  
-  if callback then
-    local results, err = run_search()
-    vim.schedule(function()
-      callback(results, err)
-    end)
-    return
-  else
-    return run_search()
+
+  local url = string.format('%s/wiki/rest/api/content/search?cql=%s',
+    config.base_url, url_encode(cql))
+
+  local response = curl.get(url, { headers = hdrs })
+  if not response or response.status ~= 200 then
+    local status = response and response.status or 'no response'
+    return nil, string.format('HTTP %s', status)
   end
+  local ok, data = pcall(vim.fn.json_decode, response.body)
+  if not ok then return nil, 'Failed to decode search response' end
+  return data.results or {}, nil
 end
+
 
 --- Fetch a single page with its body in storage format.
 M.get_page_content = function(page_id)

@@ -243,18 +243,15 @@ M.search_pages = function(query)
   if not query or query == '' then
     if not cached_pages then
       vim.notify('Fetching Confluence pages...', vim.log.levels.INFO)
-      convim.api.scan_all_pages({
-        callback = function(pages, err)
-          if err then
-            vim.notify('Scan failed: ' .. err, vim.log.levels.ERROR)
-            return
-          end
-          M.set_cache(pages, os.date('%Y-%m-%d %H:%M:%S'))
-          cleanup_old_search_cache()
-          vim.notify('Confluence scan complete: ' .. #pages .. ' page(s) indexed', vim.log.levels.INFO)
-          M.search_pages(nil)
-        end,
-      })
+      local pages, err = convim.api.scan_all_pages()
+      if err then
+        vim.notify('Scan failed: ' .. err, vim.log.levels.ERROR)
+        return
+      end
+      M.set_cache(pages, os.date('%Y-%m-%d %H:%M:%S'))
+      cleanup_old_search_cache()
+      vim.notify('Confluence scan complete: ' .. #pages .. ' page(s) indexed', vim.log.levels.INFO)
+      M.search_pages(nil)
       return
     end
     
@@ -300,8 +297,7 @@ M.search_pages = function(query)
       filtered_pages = cached_results
     else
       vim.notify('Searching Confluence for "' .. query .. '"...', vim.log.levels.INFO)
-      convim.api.search_pages(query, config.space_key, {
-        callback = function(results, err)
+      local results, err = convim.api.search_pages(query, config.space_key)
           if err then
             vim.notify('Search failed: ' .. err, vim.log.levels.ERROR)
             return
