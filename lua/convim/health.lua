@@ -49,13 +49,14 @@ M.check = function()
       warn('no default space_key set; run :ConfluenceListSpaces to pick one')
     end
 
-    -- Live auth probe
+    -- Live auth probe (may be slow if server is unreachable)
+    warn('Auth check requires network; skip with config.validate() only')
     local api = require('convim.api')
     local result = api.verify_auth()
     if result.ok then
       ok(result.message)
     else
-      err('Auth check failed: ' .. (result.message or 'unknown'))
+      warn('Auth check failed: ' .. (result.message or 'unknown'))
     end
   end
 end

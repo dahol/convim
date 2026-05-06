@@ -3,6 +3,9 @@ local config = require('convim.config')
 
 local M = {}
 
+--- Default HTTP request timeout in seconds.
+local DEFAULT_TIMEOUT = 30
+
 --- Convert a Markdown (or wiki-markup) string to Confluence storage format
 --- (XHTML) using the contentbody/convert/storage endpoint.
 --- Note: Confluence's converter accepts representations 'wiki', 'editor',
@@ -28,6 +31,7 @@ M.to_storage = function(source, from_representation)
       value          = source,
       representation = from_representation or 'wiki',
     }),
+    timeout = DEFAULT_TIMEOUT,
   })
 
   if not response or response.status ~= 200 then

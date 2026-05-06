@@ -102,11 +102,21 @@ M.compact = function(xhtml)
   local s = xhtml
   -- Drop indentation/newlines that sit between tags only.
   s = s:gsub('>%s*\n%s*<', '><')
-  -- Collapse remaining leading/trailing whitespace on each line, then join.
+  -- Remove lines that are purely whitespace and structural indentation
+  -- before/after tags, but preserve text content lines intact.
   local parts = {}
   for line in (s .. '\n'):gmatch('([^\n]*)\n') do
-    local t = line:gsub('^%s+', ''):gsub('%s+$', '')
-    if t ~= '' then table.insert(parts, t) end
+    local trimmed = line:gsub('^%s+', ''):gsub('%s+$', '')
+    if trimmed == '' then
+      -- Skip purely blank lines (structural whitespace between blocks)
+    elseif line:match('^%s*<') and line:match('>%s*$') then
+      -- Line is purely a tag (possibly with surrounding whitespace) — trim
+      table.insert(parts, trimmed)
+    else
+      -- Line contains text content — preserve as-is to avoid corrupting
+      -- intentional whitespace within text nodes
+      table.insert(parts, line)
+    end
   end
   return table.concat(parts, '')
 end

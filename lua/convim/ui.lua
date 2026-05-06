@@ -240,20 +240,20 @@ M.search_pages = function(query)
   if err then vim.notify(err, vim.log.levels.ERROR) return end
 
   -- If no query provided, show all cached pages (or scan first if cache is empty)
-  if not query or query == '' then
-    if not cached_pages then
-      vim.notify('Fetching Confluence pages...', vim.log.levels.INFO)
-      local pages, err = convim.api.scan_all_pages()
-      if err then
-        vim.notify('Scan failed: ' .. err, vim.log.levels.ERROR)
+    if not query or query == '' then
+      if not cached_pages then
+        vim.notify('Fetching Confluence pages...', vim.log.levels.INFO)
+        local pages, err = api.scan_all_pages()
+        if err then
+          vim.notify('Scan failed: ' .. err, vim.log.levels.ERROR)
+          return
+        end
+        M.set_cache(pages, os.date('%Y-%m-%d %H:%M:%S'))
+        cleanup_old_search_cache()
+        vim.notify('Confluence scan complete: ' .. #pages .. ' page(s) indexed', vim.log.levels.INFO)
+        M.search_pages(nil)
         return
       end
-      M.set_cache(pages, os.date('%Y-%m-%d %H:%M:%S'))
-      cleanup_old_search_cache()
-      vim.notify('Confluence scan complete: ' .. #pages .. ' page(s) indexed', vim.log.levels.INFO)
-      M.search_pages(nil)
-      return
-    end
     
     local on_pick = function(page) M.edit_page(page.id) end
 
@@ -297,39 +297,37 @@ M.search_pages = function(query)
       filtered_pages = cached_results
     else
       vim.notify('Searching Confluence for "' .. query .. '"...', vim.log.levels.INFO)
-      local results, err = convim.api.search_pages(query, config.space_key)
-          if err then
-            vim.notify('Search failed: ' .. err, vim.log.levels.ERROR)
-            return
-          end
-          
-          cache_search_results(query, config.space_key, results)
-          cleanup_old_search_cache()
-          
-          if #results == 0 then
-            vim.notify('No pages found matching: ' .. query, vim.log.levels.WARN)
-            return
-          end
-          
-          vim.notify('Found ' .. #results .. ' page(s) matching "' .. query .. '"', vim.log.levels.INFO)
-          
-          local on_pick = function(page) M.edit_page(page.id) end
-          
-          if picker.list_pages(results, 'Search results', on_pick) then
-            return
-          end
+      local results, err = api.search_pages(query, config.space_key)
+      if err then
+        vim.notify('Search failed: ' .. err, vim.log.levels.ERROR)
+        return
+      end
 
-          vim.ui.select(results, {
-            prompt = 'Search results:',
-            format_item = function(page)
-              local space = page._space_key and ('[' .. page._space_key .. '] ') or ''
-              return space .. (page.title or page.id)
-            end,
-          }, function(page)
-            if page then on_pick(page) end
-          end)
+      cache_search_results(query, config.space_key, results)
+      cleanup_old_search_cache()
+
+      if #results == 0 then
+        vim.notify('No pages found matching: ' .. query, vim.log.levels.WARN)
+        return
+      end
+
+      vim.notify('Found ' .. #results .. ' page(s) matching "' .. query .. '"', vim.log.levels.INFO)
+
+      local on_pick = function(page) M.edit_page(page.id) end
+
+      if picker.list_pages(results, 'Search results', on_pick) then
+        return
+      end
+
+      vim.ui.select(results, {
+        prompt = 'Search results:',
+        format_item = function(page)
+          local space = page._space_key and ('[' .. page._space_key .. '] ') or ''
+          return space .. (page.title or page.id)
         end,
-      })
+      }, function(page)
+        if page then on_pick(page) end
+      end)
       return
     end
   end

@@ -66,12 +66,14 @@ function M.search_pages(api, space_key, initial_query, on_select)
       actions.select_default:replace(function()
         local entry = action_state.get_selected_entry()
         actions.close(prompt_bufnr)
-        -- Defer until after telescope finishes tearing down its prompt
-        -- buffer/window.  Otherwise creating a new buffer inside
-        -- on_select can race with telescope's own buffer cleanup and
-        -- produce 'Invalid buffer id' errors.
+        -- Double-schedule to ensure telescope has fully torn down its
+        -- prompt buffer/window before on_select creates new buffers.
+        -- A single vim.schedule only defers one event-loop tick, which
+        -- isn't enough for telescope's async cleanup.
         if entry and entry.value then
-          vim.schedule(function() on_select(entry.value) end)
+          vim.schedule(function()
+            vim.schedule(function() on_select(entry.value) end)
+          end)
         end
       end)
       return true
@@ -103,7 +105,9 @@ function M.list_pages(pages, title, on_select)
         local entry = action_state.get_selected_entry()
         actions.close(prompt_bufnr)
         if entry and entry.value then
-          vim.schedule(function() on_select(entry.value) end)
+          vim.schedule(function()
+            vim.schedule(function() on_select(entry.value) end)
+          end)
         end
       end)
       return true

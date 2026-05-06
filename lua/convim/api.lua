@@ -3,6 +3,9 @@ local config = require('convim.config')
 
 local M = {}
 
+--- Default HTTP request timeout in seconds.
+local DEFAULT_TIMEOUT = 30
+
 --- Build the standard auth/accept headers.
 --- Returns headers table, or nil + err if auth could not be built.
 local function headers(extra)
@@ -42,7 +45,7 @@ local function fetch_all(url, opts)
       paged_url = url .. (url:find('?') and '&' or '?') .. table.concat(params, '&')
     end
 
-    local response = curl.get(paged_url, { headers = opts.headers })
+    local response = curl.get(paged_url, { headers = opts.headers, timeout = DEFAULT_TIMEOUT })
     if not response or response.status ~= 200 then
       local msg = (response and response.status) or 'no response'
       return nil, string.format('HTTP %s from %s', msg, paged_url)
@@ -82,7 +85,7 @@ M.verify_auth = function()
 
   -- Probe the spaces endpoint with limit=1 — cheap and requires auth
   local probe_url = config.base_url .. '/wiki/api/v2/spaces?limit=1'
-  local ok, response = pcall(curl.get, probe_url, { headers = hdrs })
+  local ok, response = pcall(curl.get, probe_url, { headers = hdrs, timeout = DEFAULT_TIMEOUT })
 
   if not ok then
     return {
@@ -122,7 +125,7 @@ M.verify_auth = function()
   -- Auth succeeded — fetch the current user for a friendly confirmation
   local user = 'unknown'
   local user_url = config.base_url .. '/wiki/rest/api/user/current'
-  local u_ok, u_resp = pcall(curl.get, user_url, { headers = hdrs })
+  local u_ok, u_resp = pcall(curl.get, user_url, { headers = hdrs, timeout = DEFAULT_TIMEOUT })
   if u_ok and u_resp and u_resp.status == 200 then
     local dec_ok, data = pcall(vim.fn.json_decode, u_resp.body)
     if dec_ok and data then
@@ -163,7 +166,7 @@ M.get_space_id_by_key = function(space_key)
 
   local url = string.format('%s/wiki/api/v2/spaces?keys=%s&limit=1',
     config.base_url, url_encode(space_key))
-  local response = curl.get(url, { headers = hdrs })
+  local response = curl.get(url, { headers = hdrs, timeout = DEFAULT_TIMEOUT })
   if not response or response.status ~= 200 then
     local status = response and response.status or 'no response'
     return nil, string.format('HTTP %s resolving space key %s', status, space_key)
@@ -233,7 +236,7 @@ M.search_pages = function(query, space_key)
   local url = string.format('%s/wiki/rest/api/content/search?cql=%s',
     config.base_url, url_encode(cql))
 
-  local response = curl.get(url, { headers = hdrs })
+  local response = curl.get(url, { headers = hdrs, timeout = DEFAULT_TIMEOUT })
   if not response or response.status ~= 200 then
     local status = response and response.status or 'no response'
     return nil, string.format('HTTP %s', status)
@@ -253,7 +256,7 @@ M.get_page_content = function(page_id)
   if not hdrs then return nil, herr end
 
   local url = string.format('%s/wiki/api/v2/pages/%s?body-format=storage', config.base_url, page_id)
-  local response = curl.get(url, { headers = hdrs })
+  local response = curl.get(url, { headers = hdrs, timeout = DEFAULT_TIMEOUT })
   if not response or response.status ~= 200 then
     local status = response and response.status or 'no response'
     return nil, string.format('HTTP %s fetching page %s', status, page_id)
@@ -292,6 +295,7 @@ M.create_page = function(space_key, title, content, parent_id)
   local response = curl.post(url, {
     headers = hdrs,
     body    = vim.fn.json_encode(payload),
+    timeout = DEFAULT_TIMEOUT,
   })
   if not response or (response.status ~= 200 and response.status ~= 201) then
     local status = response and response.status or 'no response'
@@ -304,6 +308,9 @@ end
 
 --- Update an existing page. Automatically fetches the current version and increments it.
 M.update_page = function(page_id, title, content)
+  local err = config.validate()
+  if err then return nil, err end
+
   local hdrs, herr = headers({ ['Content-Type'] = 'application/json' })
   if not hdrs then return nil, herr end
 
@@ -330,6 +337,7 @@ M.update_page = function(page_id, title, content)
   local response = curl.put(url, {
     headers = hdrs,
     body    = vim.fn.json_encode(payload),
+    timeout = DEFAULT_TIMEOUT,
   })
   if not response or response.status ~= 200 then
     local status = response and response.status or 'no response'

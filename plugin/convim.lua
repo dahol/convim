@@ -123,10 +123,32 @@ end, { desc = 'Save the current Confluence buffer' })
 
 vim.api.nvim_create_user_command('ConfluencePreview', function()
   local buf = vim.api.nvim_get_current_buf()
+  local mode = nil
+  local ok, val = pcall(vim.api.nvim_buf_get_var, buf, 'confluence_mode')
+  if ok then mode = val end
+
   local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   local content = table.concat(lines, '\n')
 
-  local html, err = convim.converter.to_storage(content)
+  local html
+  local err
+
+  if mode == 'markdown' then
+    -- For markdown buffers, convert via the markdown module first
+    local markdown = require('convim.markdown')
+    local meta = nil
+    ok, meta = pcall(vim.api.nvim_buf_get_var, buf, 'confluence_meta')
+    if not ok then meta = { macros = {} } end
+    html = markdown.to_storage(content, meta)
+    if not html or html == '' then
+      err = 'markdown conversion produced empty output'
+    end
+  else
+    -- For storage/raw buffers, send through the converter endpoint
+    local convim = require('convim')
+    html, err = convim.converter.to_storage(content)
+  end
+
   if not html then
     vim.notify('Preview failed: ' .. (err or ''), vim.log.levels.ERROR)
     return

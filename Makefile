@@ -10,7 +10,7 @@ clean:
 
 install:
 	@mkdir -p ~/.local/share/nvim/site/pack/plugins/start/convim
-	@cp -r lua plugin after ftplugin ~/.local/share/nvim/site/pack/plugins/start/convim/
+	@cp -r lua plugin after ftplugin syntax ~/.local/share/nvim/site/pack/plugins/start/convim/
 
 fmt:
 	@stylua lua/ tests/ plugin/ 2>/dev/null || echo "stylua not found (cargo install stylua)"

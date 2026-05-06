@@ -7,6 +7,7 @@ globals = {
   "assert",
   "before_each",
   "after_each",
+  -- 'vim' is a Neovim builtin but not in lua51 std; must declare explicitly
   "vim",
   "mock",
   "stub"

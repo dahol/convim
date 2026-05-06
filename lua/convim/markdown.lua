@@ -414,6 +414,33 @@ M.from_storage = function(xhtml)
   return table.concat(out, '\n\n'), meta
 end
 
+-- ── inline markdown → XHTML ─────────────────────────────────────────────────
+
+M._inline_to_xhtml = function(s)
+  if not s or s == '' then return '' end
+
+  -- Encode entities first so the markup we *insert* below survives.
+  -- We must do this before introducing literal `<` / `>` in tags.
+  s = encode_entities(s)
+
+  -- Inline code `xxx`  (escape any markdown markers inside back to text)
+  s = s:gsub('`([^`]+)`', function(code)
+    return '<code>' .. code .. '</code>'
+  end)
+
+  -- Links [text](url)
+  s = s:gsub('%[([^%]]+)%]%(([^)]+)%)', function(text, url)
+    return string.format('<a href="%s">%s</a>', url, text)
+  end)
+
+  -- Bold **x**
+  s = s:gsub('%*%*([^%*]+)%*%*', '<strong>%1</strong>')
+  -- Italic *x*  (single-star, not part of **)
+  s = s:gsub('%*([^%*\n]+)%*', '<em>%1</em>')
+
+  return s
+end
+
 -- ────────────────────────────────────────────────────────────────────────────
 -- Public: markdown → storage
 -- ────────────────────────────────────────────────────────────────────────────
@@ -531,33 +558,6 @@ M.to_storage = function(md, meta)
   end
 
   return table.concat(out, '')
-end
-
--- ── inline markdown → XHTML ─────────────────────────────────────────────────
-
-M._inline_to_xhtml = function(s)
-  if not s or s == '' then return '' end
-
-  -- Encode entities first so the markup we *insert* below survives.
-  -- We must do this before introducing literal `<` / `>` in tags.
-  s = encode_entities(s)
-
-  -- Inline code `xxx`  (escape any markdown markers inside back to text)
-  s = s:gsub('`([^`]+)`', function(code)
-    return '<code>' .. code .. '</code>'
-  end)
-
-  -- Links [text](url)
-  s = s:gsub('%[([^%]]+)%]%(([^)]+)%)', function(text, url)
-    return string.format('<a href="%s">%s</a>', url, text)
-  end)
-
-  -- Bold **x**
-  s = s:gsub('%*%*([^%*]+)%*%*', '<strong>%1</strong>')
-  -- Italic *x*  (single-star, not part of **)
-  s = s:gsub('%*([^%*\n]+)%*', '<em>%1</em>')
-
-  return s
 end
 
 -- ── markdown lists → XHTML ─────────────────────────────────────────────────
