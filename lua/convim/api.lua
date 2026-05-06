@@ -3,8 +3,8 @@ local config = require('convim.config')
 
 local M = {}
 
---- Default HTTP request timeout in seconds.
-local DEFAULT_TIMEOUT = 30
+--- Default HTTP request timeout in milliseconds (plenary expects ms).
+local DEFAULT_TIMEOUT = 30000
 
 --- Build the standard auth/accept headers.
 --- Returns headers table, or nil + err if auth could not be built.
