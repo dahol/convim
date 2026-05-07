@@ -74,11 +74,34 @@ end
 --- markdown.  Operates only on inline-level constructs; block tags inside
 --- this string are left as-is (the caller is responsible for splitting blocks
 --- before calling).
-local function inline_to_md(s)
+local function inline_to_md(s, meta)
   if not s then return '' end
   -- <br/> → newline (markdown hard break is two trailing spaces, but inside a
   -- paragraph an actual newline reads better in nvim).
   s = s:gsub('<br%s*/?>', '  \n')
+
+  -- Stash inline macros before they get destroyed.
+  if meta then
+    s = s:gsub('<ac:structured%-macro(.-)</ac:structured%-macro>', function(inner)
+      meta.macros = meta.macros or {}
+      local raw = '<ac:structured-macro' .. inner .. '</ac:structured-macro>'
+      table.insert(meta.macros, raw)
+      return string.format('<!-- convim:macro:%d -->', #meta.macros)
+    end)
+    s = s:gsub('<ac:image(.-)</ac:image>', function(inner)
+      meta.macros = meta.macros or {}
+      local raw = '<ac:image' .. inner .. '</ac:image>'
+      table.insert(meta.macros, raw)
+      return string.format('<!-- convim:macro:%d -->', #meta.macros)
+    end)
+    s = s:gsub('<ac:emoticon[^>]*/>', function(raw)
+      meta.macros = meta.macros or {}
+      table.insert(meta.macros, raw)
+      local emoji = raw:match('ac:emoji%-shortname="([^"]+)"')
+      if emoji then return string.format('<!-- convim:macro:%d -->%s', #meta.macros, emoji) end
+      return string.format('<!-- convim:macro:%d -->', #meta.macros)
+    end)
+  end
 
   -- <strong>/<b>
   s = s:gsub('<strong[^>]*>(.-)</strong>', '**%1**')
@@ -282,7 +305,7 @@ local function list_to_md(inner, ordered, depth, meta)
     -- The lead text may still contain a wrapping <p>; unwrap once.
     lead = lead:gsub('^%s*<p[^>]*>(.-)</p>%s*$', '%1')
 
-    local text = trim(inline_to_md(lead))
+    local text = trim(inline_to_md(lead, meta))
     table.insert(lines, indent .. marker .. text)
     for _, nl in ipairs(nested_md) do
       table.insert(lines, nl)
@@ -328,13 +351,13 @@ end
 -- Table rendering (best-effort: simple rectangular tables only)
 -- ────────────────────────────────────────────────────────────────────────────
 
-local function table_to_md(inner)
+local function table_to_md(inner, meta)
   local rows = {}
   for tr in inner:gmatch('<tr[^>]*>(.-)</tr>') do
     local cells = {}
     local is_header = tr:find('<th', 1, true) ~= nil
     for cell in tr:gmatch('<t[hd][^>]*>(.-)</t[hd]>') do
-      local txt = trim(inline_to_md(cell:gsub('<p[^>]*>', ''):gsub('</p>', ' ')))
+      local txt = trim(inline_to_md(cell:gsub('<p[^>]*>', ''):gsub('</p>', ' '), meta))
       txt = txt:gsub('|', '\\|'):gsub('\n', ' ')
       table.insert(cells, txt)
     end
@@ -384,19 +407,19 @@ M.from_storage = function(xhtml)
 
   for _, tok in ipairs(tokens) do
     if tok.kind == 'text' then
-      local t = trim(inline_to_md(tok.raw))
+      local t = trim(inline_to_md(tok.raw, meta))
       if t ~= '' then table.insert(out, t) end
     elseif tok.tag:match('^h[1-6]$') then
       local level = tonumber(tok.tag:sub(2))
-      local text = trim(inline_to_md(tok.inner))
+      local text = trim(inline_to_md(tok.inner, meta))
       table.insert(out, string.rep('#', level) .. ' ' .. text)
     elseif tok.tag == 'p' then
-      local text = trim(inline_to_md(tok.inner))
+      local text = trim(inline_to_md(tok.inner, meta))
       if text ~= '' then table.insert(out, text) end
     elseif tok.tag == 'hr' then
       table.insert(out, '---')
     elseif tok.tag == 'blockquote' then
-      local text = trim(inline_to_md(tok.inner:gsub('<p[^>]*>', ''):gsub('</p>', '\n')))
+      local text = trim(inline_to_md(tok.inner:gsub('<p[^>]*>', ''):gsub('</p>', '\n'), meta))
       local quoted = {}
       for line in (text .. '\n'):gmatch('([^\n]*)\n') do
         table.insert(quoted, '> ' .. line)
@@ -408,7 +431,7 @@ M.from_storage = function(xhtml)
     elseif tok.tag == 'pre' then
       table.insert(out, '```\n' .. tags_to_text(tok.inner) .. '\n```')
     elseif tok.tag == 'table' then
-      table.insert(out, table_to_md(tok.inner))
+      table.insert(out, table_to_md(tok.inner, meta))
     elseif tok.tag == 'ac:structured-macro' then
       local code = code_macro_to_md(tok.open, tok.inner)
       if code then
@@ -583,7 +606,18 @@ M.to_storage = function(md, meta)
     end
   end
 
-  return table.concat(out, '')
+  local final_out = table.concat(out, '')
+
+  -- Re-inline any macros that were embedded within text blocks and got escaped
+  if meta and meta.macros then
+    final_out = final_out:gsub('&lt;!%-%-%s*convim:macro:(%d+)%s*%-%-&gt;', function(idx)
+      return meta.macros[tonumber(idx)] or ''
+    end)
+    -- Also handle them if they weren't escaped (e.g. from the block-level loop)
+    -- Actually, block-level loop inserts the macro raw without escaping.
+  end
+
+  return final_out
 end
 
 -- ── markdown lists → XHTML ─────────────────────────────────────────────────

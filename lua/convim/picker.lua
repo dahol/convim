@@ -29,7 +29,57 @@ local function make_entry(page)
   }
 end
 
---- Live-search Confluence pages using telescope's dynamic finder.
+--- A custom asynchronous finder that doesn't block the UI thread.
+local AsyncConfluenceFinder = setmetatable({
+  close = function(self)
+    self._current_req = (self._current_req or 0) + 1
+  end,
+}, {
+  __call = function(cls, opts)
+    return setmetatable({
+      api = opts.api,
+      space_key = opts.space_key,
+      entry_maker = make_entry,
+      _current_req = 0,
+    }, {
+      __index = cls
+    })
+  end
+})
+
+function AsyncConfluenceFinder:_find(prompt, process_result, process_complete)
+  self._current_req = self._current_req + 1
+  local req_id = self._current_req
+
+  if not prompt or prompt == '' then
+    process_complete()
+    return
+  end
+
+  self.api.search_pages(prompt, self.space_key, function(results, err)
+    -- If a new request was started or the finder was closed, ignore this callback.
+    if self._current_req ~= req_id then return end
+
+    if not results then
+      vim.schedule(function()
+        vim.notify('Search failed: ' .. (err or ''), vim.log.levels.ERROR)
+      end)
+    else
+      for i, page in ipairs(results) do
+        local entry = self.entry_maker(page)
+        if entry then
+          entry.index = i
+          if process_result(entry) then
+            return
+          end
+        end
+      end
+    end
+    process_complete()
+  end)
+end
+
+--- Live-search Confluence pages using an async dynamic finder.
 --- @param api table  convim.api module (passed in for testability)
 --- @param space_key string|nil  optional space scope
 --- @param initial_query string|nil
@@ -39,7 +89,6 @@ function M.search_pages(api, space_key, initial_query, on_select)
   if not M.available() then return false end
 
   local pickers       = require('telescope.pickers')
-  local finders       = require('telescope.finders')
   local conf          = require('telescope.config').values
   local actions       = require('telescope.actions')
   local action_state  = require('telescope.actions.state')
@@ -47,19 +96,9 @@ function M.search_pages(api, space_key, initial_query, on_select)
   pickers.new({}, {
     prompt_title = 'Confluence: search pages' .. (space_key and (' [' .. space_key .. ']') or ''),
     default_text = initial_query or '',
-    finder = finders.new_dynamic({
-      fn = function(query)
-        if not query or query == '' then return {} end
-        local results, err = api.search_pages(query, space_key)
-        if not results then
-          vim.schedule(function()
-            vim.notify('Search failed: ' .. (err or ''), vim.log.levels.ERROR)
-          end)
-          return {}
-        end
-        return results
-      end,
-      entry_maker = make_entry,
+    finder = AsyncConfluenceFinder({
+      api = api,
+      space_key = space_key,
     }),
     sorter = conf.generic_sorter({}),
     attach_mappings = function(prompt_bufnr, _map)

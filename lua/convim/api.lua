@@ -219,12 +219,17 @@ M.scan_all_pages = function()
 end
 
 --- Search pages by title in the current space (or globally if space_key is nil).
-M.search_pages = function(query, space_key)
+--- If `cb` is provided, executes asynchronously and calls `cb(results, err)`.
+M.search_pages = function(query, space_key, cb)
   local err = config.validate()
-  if err then return nil, err end
+  if err then
+    if cb then return cb(nil, err) else return nil, err end
+  end
 
   local hdrs, herr = headers()
-  if not hdrs then return nil, herr end
+  if not hdrs then
+    if cb then return cb(nil, herr) else return nil, herr end
+  end
 
   -- Escape embedded double quotes inside the CQL value.
   local safe_q = query:gsub('"', '\\\"')
@@ -235,6 +240,29 @@ M.search_pages = function(query, space_key)
 
   local url = string.format('%s/wiki/rest/api/content/search?cql=%s',
     config.base_url, url_encode(cql))
+
+  if cb then
+    curl.get(url, {
+      headers = hdrs,
+      timeout = DEFAULT_TIMEOUT,
+      callback = function(response)
+        vim.schedule(function()
+          if not response or response.status ~= 200 then
+            local status = response and response.status or 'no response'
+            cb(nil, string.format('HTTP %s', status))
+            return
+          end
+          local ok, data = pcall(vim.fn.json_decode, response.body)
+          if not ok then
+            cb(nil, 'Failed to decode search response')
+            return
+          end
+          cb(data.results or {}, nil)
+        end)
+      end
+    })
+    return
+  end
 
   local response = curl.get(url, { headers = hdrs, timeout = DEFAULT_TIMEOUT })
   if not response or response.status ~= 200 then
