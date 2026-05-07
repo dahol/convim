@@ -91,8 +91,19 @@ local function inline_to_md(s)
   -- <code>
   s = s:gsub('<code[^>]*>(.-)</code>', '`%1`')
 
-  -- <a href="…">text</a>  (only handle the common shape; ignore <ac:link>)
+  -- <a href="…">text</a>
   s = s:gsub('<a%s+[^>]-href="([^"]*)"[^>]*>(.-)</a>', '[%2](%1)')
+
+  -- <ac:link><ri:page ri:content-title="title" /><ac:link-body>text</ac:link-body></ac:link>
+  s = s:gsub('<ac:link[^>]*>.-<ri:page ri:content%-title="([^"]+)"[^>]*/><ac:link%-body>(.-)</ac:link%-body>.-</ac:link>', '[%2](ac:page:%1)')
+  -- Without link body
+  s = s:gsub('<ac:link[^>]*>.-<ri:page ri:content%-title="([^"]+)"[^>]*/>.-</ac:link>', '[%1](ac:page:%1)')
+
+  -- <ac:link><ri:user ri:account-id="id" /></ac:link>
+  s = s:gsub('<ac:link[^>]*>.-<ri:user ri:account%-id="([^"]+)"[^>]*/>.-</ac:link>', '[@user](ac:user:%1)')
+
+  -- <time datetime="YYYY-MM-DD" />
+  s = s:gsub('<time datetime="([^"]+)"%s*/>', '<time:%1>')
 
   -- Strip any remaining inline tags we don't model rather than leaking them.
   s = s:gsub('<span[^>]*>', ''):gsub('</span>', '')
@@ -428,15 +439,30 @@ M._inline_to_xhtml = function(s)
     return '<code>' .. code .. '</code>'
   end)
 
-  -- Links [text](url)
+  -- Links [text](url), including ac:page: and ac:user: pseudo-urls
   s = s:gsub('%[([^%]]+)%]%(([^)]+)%)', function(text, url)
-    return string.format('<a href="%s">%s</a>', url, text)
+    if url:match('^ac:page:(.*)$') then
+      local page = url:match('^ac:page:(.*)$')
+      if text == page then
+        return string.format('<ac:link><ri:page ri:content-title="%s" /></ac:link>', page)
+      else
+        return string.format('<ac:link><ri:page ri:content-title="%s" /><ac:link-body>%s</ac:link-body></ac:link>', page, text)
+      end
+    elseif url:match('^ac:user:(.*)$') then
+      local account_id = url:match('^ac:user:(.*)$')
+      return string.format('<ac:link><ri:user ri:account-id="%s" /></ac:link>', account_id)
+    else
+      return string.format('<a href="%s">%s</a>', url, text)
+    end
   end)
 
   -- Bold **x**
   s = s:gsub('%*%*([^%*]+)%*%*', '<strong>%1</strong>')
   -- Italic *x*  (single-star, not part of **)
   s = s:gsub('%*([^%*\n]+)%*', '<em>%1</em>')
+
+  -- <time:YYYY-MM-DD>
+  s = s:gsub('<time:([^>]+)>', '<time datetime="%1" />')
 
   return s
 end
